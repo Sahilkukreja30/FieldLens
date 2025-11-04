@@ -1,123 +1,123 @@
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Eye, Download, Phone, Calendar, User } from "lucide-react";
-import { downloadJobZip } from "@/lib/api";
-import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
 
 type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
 
-interface TaskCardProps {
-  task: {
-    id: string;
-    title: string;
-    phoneNumber: string;
-    status: TaskStatus;
-    createdAt: string;
-    assignedTo?: string;
-    metadata?: Record<string, any>;
-  };
-  onPreview: (taskId: string) => void;
-}
-
-// map uppercase backend statuses to your Tailwind color classes
-const statusClasses: Record<TaskStatus, string> = {
-  PENDING: "bg-warning text-warning-foreground",
-  IN_PROGRESS: "bg-info text-info-foreground",
-  DONE: "bg-success text-success-foreground",
-  FAILED: "bg-destructive text-destructive-foreground",
+export type UITask = {
+  id: string;
+  title: string;          // "Job • <phone>"
+  phoneNumber: string;
+  status: TaskStatus;
+  createdAt: string;
+  siteId?: string;
+  sectors?: number[];
+  // NEW (optional): sector-wise progress summary if backend provides it
+  // Example: { "2": { done: 8, total: 14 }, "4": { done: 14, total: 14 } }
+  sectorProgress?: Record<string, { done: number; total: number }>;
 };
 
-function prettyStatus(s: TaskStatus) {
-  switch (s) {
-    case "PENDING":
-      return "Pending";
-    case "IN_PROGRESS":
-      return "In Progress";
-    case "DONE":
-      return "Completed";
-    case "FAILED":
-      return "Failed";
-  }
-}
-
-export function TaskCard({ task, onPreview }: TaskCardProps) {
-  const { toast } = useToast();
-  const [downloading, setDownloading] = useState(false);
-
-  const handleExport = async (taskId: string) => {
-    setDownloading(true);
-    toast({ title: "Export started", description: `Preparing ZIP for ${taskId}...` });
-    try {
-      await downloadJobZip(taskId);
-      toast({ title: "Export complete", description: "ZIP downloaded." });
-    } catch (e: any) {
-      toast({
-        title: "Export failed",
-        description: e?.message ?? "Unknown error",
-        variant: "destructive",
-      });
-    } finally {
-      setDownloading(false);
-    }
+export function TaskCard({
+  task,
+  onPreview,
+}: {
+  task: UITask;
+  onPreview: (taskId: string) => void;
+}) {
+  const statusClass: Record<TaskStatus, string> = {
+    PENDING: "bg-warning text-warning-foreground",
+    IN_PROGRESS: "bg-info text-info-foreground",
+    DONE: "bg-success text-success-foreground",
+    FAILED: "bg-destructive text-destructive-foreground",
   };
 
+  const prettyStatus = (s: TaskStatus) =>
+    s === "PENDING"
+      ? "Pending"
+      : s === "IN_PROGRESS"
+      ? "In Progress"
+      : s === "DONE"
+      ? "Completed"
+      : "Failed";
+
+  const hasProgress =
+    task.sectorProgress && Object.keys(task.sectorProgress).length > 0;
+
+  const sortedSectors: number[] = Array.isArray(task.sectors)
+    ? [...task.sectors].sort((a, b) => a - b)
+    : [];
+
+  // Build chip data: sector label + optional percentage
+  const chips = sortedSectors.map((s) => {
+    const sp = task.sectorProgress?.[String(s)];
+    let label = `S${s}`;
+    if (sp && sp.total > 0) {
+      const pct = Math.round((sp.done / sp.total) * 100);
+      label = `${label} • ${pct}%`;
+    }
+    return { sector: s, label };
+  });
+
   return (
-    <Card className="hover:shadow-md transition-shadow">
+    <Card className="flex flex-col">
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h3 className="font-medium text-foreground">{task.title}</h3>
-            <p className="text-sm text-muted-foreground mt-1">ID: {task.id}</p>
-          </div>
-          <Badge className={statusClasses[task.status]}>{prettyStatus(task.status)}</Badge>
+        <div className="flex items-start gap-3">
+          <CardTitle className="text-base font-semibold min-w-0 truncate">
+            {task.title}
+          </CardTitle>
+          <Badge className={`${statusClass[task.status]} ml-auto`}>
+            {prettyStatus(task.status)}
+          </Badge>
         </div>
       </CardHeader>
 
-      <CardContent className="pt-0">
-        <div className="space-y-3">
-          <div className="flex items-center text-sm text-muted-foreground">
-            <Phone className="w-4 h-4 mr-2" />
+      <CardContent className="flex-1 flex flex-col gap-3 text-sm text-muted-foreground">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="break-all">
+            <span className="font-medium text-foreground">Job Id:</span> {task.id}
+          </div>
+          <div className="break-all">
+            <span className="font-medium text-foreground">Phone:</span>{" "}
             {task.phoneNumber}
           </div>
-
-          <div className="flex items-center text-sm text-muted-foreground">
-            <Calendar className="w-4 h-4 mr-2" />
+          <div>
+            <span className="font-medium text-foreground">Created:</span>{" "}
             {new Date(task.createdAt).toLocaleString()}
           </div>
-
-          {task.assignedTo && (
-            <div className="flex items-center text-sm text-muted-foreground">
-              <User className="w-4 h-4 mr-2" />
-              {task.assignedTo}
+          {task.siteId && (
+            <div className="break-all">
+              <span className="font-medium text-foreground">Site ID:</span>{" "}
+              {task.siteId}
             </div>
           )}
+        </div>
 
-          <div className="flex gap-2 pt-3">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onPreview(task.id)}
-              className="flex-1"
-            >
-              <Eye className="w-4 h-4 mr-1" />
-              Preview
-            </Button>
-
-            {task.status === "DONE" && (
-              <Button
-                size="sm"
-                variant="default"
-                onClick={() => handleExport(task.id)}
-                className="flex-1"
-                disabled={downloading}
-              >
-                <Download className="w-4 h-4 mr-1" />
-                {downloading ? "Exporting…" : "Export"}
-              </Button>
-            )}
+        {/* NEW: Sector progress chips row */}
+        {sortedSectors.length > 0 && (
+          <div className="mt-2">
+            <div className="mb-1 text-foreground font-medium">Sectors</div>
+            <div className="flex flex-wrap gap-2">
+              {chips.map((c) => (
+                <Badge
+                  key={c.sector}
+                  variant={hasProgress ? "default" : "secondary"}
+                  className={
+                    hasProgress
+                      ? "bg-primary/10 text-primary border border-primary/20"
+                      : ""
+                  }
+                >
+                  {c.label}
+                </Badge>
+              ))}
+            </div>
           </div>
+        )}
+
+        <div className="mt-3">
+          <Button size="sm" onClick={() => onPreview(task.id)}>
+            Preview
+          </Button>
         </div>
       </CardContent>
     </Card>

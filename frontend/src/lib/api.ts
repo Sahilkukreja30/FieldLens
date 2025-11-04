@@ -9,15 +9,22 @@ export const api = axios.create({
 });
 
 // Job types from backend
+// Add to BackendJob
 export type BackendJob = {
   id: string;
   workerPhone: string;
   requiredTypes: string[];
   currentIndex: number;
   status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
-  sector?: number;
+  sector?: number;          // legacy (single)
   createdAt?: string | null;
+  // NEW
+  siteId?: string;
+  sectors?: number[];       // merged list
 };
+
+
+
 
 export type PhotoItem = {
   id: string;
@@ -42,6 +49,8 @@ export type JobDetail = {
     rsnId?:string,
     azimuthDeg?:string,
     createdAt?: string | null;
+    siteId?: string;
+    sectors?: number[];
   };
   photos: PhotoItem[];
 };
@@ -61,8 +70,8 @@ export async function fetchJobDetail(id: string) {
 
 export async function createJob(input: {
   workerPhone: string;
-  requiredTypes: string[];
-  sector?: number;
+  siteId: string;
+  sector: number;
 }): Promise<BackendJob> {
   const { data } = await api.post("/jobs", input);
   return data;

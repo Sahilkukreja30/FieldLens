@@ -1,4 +1,4 @@
-import { useState,useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -73,13 +73,15 @@ export default function TaskHistory() {
       phoneNumber: j.workerPhone,
       status: toUpper(j.status) as TaskStatus,
       createdAt: toIsoCreated(j),
+      siteId: (j as any)?.siteId,
+      sectors: (j as any)?.sectors as number[] | undefined,
     }));
   }, [jobs]);
 
   const filteredTasks = useMemo(() => {
     let list = uiTasks;
     if (statusFilter !== "all") {
-      const wantedStatus: TaskStatus = statusFilterMap[statusFilter as Exclude<StatusFilter,"all">];
+      const wantedStatus: TaskStatus = statusFilterMap[statusFilter as Exclude<StatusFilter, "all">];
       list = list.filter((t) => t.status === wantedStatus);
     }
     const q = searchQuery.trim().toLowerCase();
@@ -88,6 +90,7 @@ export default function TaskHistory() {
         (t) =>
           t.title.toLowerCase().includes(q) ||
           t.phoneNumber.toLowerCase().includes(q) ||
+          (t.siteId || "").toLowerCase().includes(q) ||
           t.id.toLowerCase().includes(q)
       );
     }
@@ -96,24 +99,17 @@ export default function TaskHistory() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate("/")}
-          className="gap-2 w-fit"
-        >
+        <Button variant="ghost" size="sm" onClick={() => navigate("/")} className="gap-2 w-fit">
           <ArrowLeft className="w-4 h-4" />
           Back to Dashboard
         </Button>
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Task History</h1>
-          <p className="text-muted-foreground">View completed and past automation tasks</p>
+          <p className="text-muted-foreground">View completed and past site+sector jobs</p>
         </div>
       </div>
 
-      {/* Filters */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -122,12 +118,11 @@ export default function TaskHistory() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {/* stack on mobile, row on md+ */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="relative md:col-span-2">
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search by task ID, title, or phone number..."
+                placeholder="Search by job ID, phone or site ID..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-10"
@@ -151,28 +146,19 @@ export default function TaskHistory() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Job History ({filteredTasks.length} tasks)</CardTitle>
+          <CardTitle>Job History ({filteredTasks.length} jobs)</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             {filteredTasks.map((task) => (
-              <div
-                key={task.id}
-                className="border rounded-lg p-4 hover:bg-accent/50 transition-colors"
-              >
-                {/* Top row: title left, badge right; wraps on small screens */}
+              <div key={task.id} className="border rounded-lg p-4 hover:bg-accent/50 transition-colors">
                 <div className="flex w-full items-start gap-3 sm:items-center">
-                  <h3 className="font-medium text-foreground min-w-0 truncate">
-                    {task.title}
-                  </h3>
-                  <Badge
-                    className={`${statusClasses[task.status]} ml-auto self-start sm:self-center`}
-                  >
+                  <h3 className="font-medium text-foreground min-w-0 truncate">{task.title}</h3>
+                  <Badge className={`${statusClasses[task.status]} ml-auto`}>
                     {prettyStatus(task.status)}
                   </Badge>
                 </div>
 
-                {/* Details */}
                 <div className="mt-3 grid grid-cols-1 gap-2 text-sm text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
                   <div className="break-all">
                     <span className="font-medium">Job Id:</span> {task.id}
@@ -180,10 +166,17 @@ export default function TaskHistory() {
                   <div className="break-all">
                     <span className="font-medium">Phone:</span> {task.phoneNumber}
                   </div>
-                  <div className="col-span-1 sm:col-auto">
-                    <span className="font-medium">Created:</span>{" "}
-                    {new Date(task.createdAt).toLocaleDateString()}
+                  <div className="break-all">
+                    <span className="font-medium">Site ID:</span> {task.siteId ?? "—"}
                   </div>
+                  <div className="col-span-1 sm:col-auto">
+                    <span className="font-medium">Created:</span> {new Date(task.createdAt).toLocaleDateString()}
+                  </div>
+                  {Array.isArray(task.sectors) && task.sectors.length > 0 && (
+                    <div className="col-span-1 sm:col-auto">
+                      <span className="font-medium">Sectors:</span> {task.sectors.sort((a,b)=>a-b).join(", ")}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

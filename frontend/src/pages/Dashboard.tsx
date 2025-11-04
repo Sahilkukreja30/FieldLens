@@ -1,4 +1,3 @@
-// src/pages/Dashboard.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,26 +7,20 @@ import FilePreviewModal from "@/components/FilePreviewModal";
 import { Plus, Search, Activity, Users, CheckCircle, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-import CreateTaskDialog from "../components/CreateTask"; // must call onCreated(newJob)
+import CreateTaskDialog from "../components/CreateTask";
 import { fetchJobs, type BackendJob } from "@/lib/api";
 
-// ────────────────────────────────────────────────────────────────────────────────
-// Dashboard
-// ────────────────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const { toast } = useToast();
 
-  // UI state
   const [searchQuery, setSearchQuery] = useState("");
   const [previewTask, setPreviewTask] = useState<string | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
 
-  // Backend data
   const [jobs, setJobs] = useState<BackendJob[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Load jobs from backend
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -43,21 +36,28 @@ export default function Dashboard() {
     })();
   }, []);
 
-  // When a job is created in the dialog, prepend it instantly
   const handleCreated = (job: BackendJob) => {
-    setJobs((prev) => [job, ...prev]);
+    // If backend returns the whole merged job, replace or prepend
+    setJobs((prev) => {
+      const idx = prev.findIndex((j) => j.id === job.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = job;
+        return copy;
+      }
+      return [job, ...prev];
+    });
+
     toast({
-      title: "Job created",
-      description: `Job ${job.id} for ${job.workerPhone} added.`,
+      title: "Job saved",
+      description: `Updated/created job for ${job.workerPhone} at site ${job.siteId ?? "—"}.`,
     });
     setOpenCreate(false);
   };
 
-  // Map backend -> TaskCard props
   const uiTasks = useMemo(() => {
     const toIsoCreated = (j: BackendJob) => {
       if (j.createdAt) return j.createdAt;
-      // fallback from Mongo ObjectId
       try {
         const secs = parseInt(j.id.slice(0, 8), 16);
         return new Date(secs * 1000).toISOString();
@@ -67,18 +67,19 @@ export default function Dashboard() {
     };
     const toUpper = (s: string) => (s ? s.toUpperCase() : s);
 
-    return jobs.map((j) => ({
+    return jobs.map((j: any) => ({
       id: j.id,
-      // Always show WhatsApp in the title for consistency
       title: `Job • ${j.workerPhone}`,
       phoneNumber: j.workerPhone,
       status: toUpper(j.status) as "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED",
       createdAt: toIsoCreated(j),
-      // keep sector if you want to show later: sector: j.sector
+      siteId: j?.siteId,
+      sectors: j?.sectors,
+      // NEW: surface sectorProgress if backend provides it
+      sectorProgress: j?.sectorProgress, // { [sector]: {done,total} }
     }));
   }, [jobs]);
 
-  // Live stats from jobs
   const liveStats = useMemo(() => {
     const total = uiTasks.length;
     const pending = uiTasks.filter((t) => t.status === "PENDING").length;
@@ -88,7 +89,6 @@ export default function Dashboard() {
     return { total, pending, processing, completed, failed };
   }, [uiTasks]);
 
-  // Search filter
   const filteredTasks = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return uiTasks;
@@ -96,11 +96,11 @@ export default function Dashboard() {
       (t) =>
         t.title.toLowerCase().includes(q) ||
         t.phoneNumber.toLowerCase().includes(q) ||
-        t.id.toLowerCase().includes(q)
+        t.id.toLowerCase().includes(q) ||
+        (t.siteId || "").toLowerCase().includes(q)
     );
   }, [uiTasks, searchQuery]);
 
-  // Actions
   const handlePreview = (taskId: string) => setPreviewTask(taskId);
 
   return (
@@ -109,26 +109,21 @@ export default function Dashboard() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground">Manage your Twilio and ML automation tasks</p>
+          <p className="text-muted-foreground">Manage site+sector jobs for your field teams</p>
         </div>
         <Button onClick={() => setOpenCreate(true)} className="gap-2">
           <Plus className="w-4 h-4" />
-          Create Task
+          Create / Merge Sector
         </Button>
       </div>
 
-      {/* Create Task Dialog (notices parent onCreated) */}
-      <CreateTaskDialog
-        open={openCreate}
-        onOpenChange={setOpenCreate}
-        onCreated={handleCreated}
-      />
+      <CreateTaskDialog open={openCreate} onOpenChange={setOpenCreate} onCreated={handleCreated} />
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Tasks</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Jobs</CardTitle>
             <Activity className="h-4 w-4 text-primary" />
           </CardHeader>
           <CardContent>
@@ -169,16 +164,14 @@ export default function Dashboard() {
 
       {/* Search + Task Grid */}
       <div className="space-y-4">
-        <div className="flex gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search tasks by ID, title, or phone number…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
-          </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by job id, phone, site id…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10"
+          />
         </div>
 
         {loading && <div className="text-muted-foreground">Loading jobs…</div>}
@@ -194,7 +187,7 @@ export default function Dashboard() {
 
         {!loading && !err && filteredTasks.length === 0 && (
           <div className="text-center py-12">
-            <p className="text-muted-foreground">No tasks found matching your search.</p>
+            <p className="text-muted-foreground">No jobs found.</p>
           </div>
         )}
       </div>

@@ -5,9 +5,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-USE_LOCAL = os.getenv("USE_LOCAL_STORAGE", "0") == "1"
-BUCKET = os.getenv("S3_BUCKET", "")
-REGION = os.getenv("AWS_REGION", "us-east-1")
+USE_LOCAL = os.getenv("USE_LOCAL_STORAGE", "0")
+BUCKET = os.getenv("S3_BUCKET", "telecom-images-project")
+REGION = os.getenv("AWS_REGION", "ap-south-1")
 
 LOCAL_DIR = os.getenv("LOCAL_STORAGE_DIR", "./_local_uploads")
 
@@ -31,7 +31,7 @@ def put_bytes(key: str, data: bytes) -> str:
         return f"s3://{BUCKET}/{key}"
 
 
-def presign_url(key: str, expires: int = 3600) -> str:
+def presign_url(key: str, expires: int = 10000) -> str:
     if USE_LOCAL:
         # served by app.main via StaticFiles (mounted at /uploads)
         return f"/uploads/{key}"
