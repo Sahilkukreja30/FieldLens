@@ -49,19 +49,41 @@ function uploadsBase(): string {
   }
 }
 
+function s3ToHttp(raw: string): string | undefined {
+  // raw like: s3://<bucket>/<key...>
+  const stripped = raw.replace(/^s3:\/\//i, "");
+  const firstSlash = stripped.indexOf("/");
+  if (firstSlash <= 0) return undefined;
+
+  const bucket = stripped.slice(0, firstSlash);
+  const key = stripped.slice(firstSlash + 1).replace(/^\/+/, "");
+
+  const base =
+    import.meta.env.VITE_S3_PUBLIC_BASE ||
+    (import.meta.env.VITE_AWS_REGION
+      ? `https://${bucket}.s3.${import.meta.env.VITE_AWS_REGION}.amazonaws.com`
+      : `https://${bucket}.s3.amazonaws.com`);
+
+  return `${base}/${key}`;
+}
+
 /** Get a usable IMG URL from a PhotoItem that may only have a key */
 function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
   if (!p) return undefined;
   const raw = (p as any).s3Url || (p as any).s3Key || "";
   if (!raw) return undefined;
 
-  // If already a full URL, use it
+  // Already a proper URL?
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  // Try to be friendly with keys like "job_123/abc.jpg" or "1762...jpg"
+  // Is it an s3:// URI?
+  if (/^s3:\/\//i.test(raw)) {
+    return s3ToHttp(raw);
+  }
+
+  // Otherwise treat it as a local key under /uploads
   const base = uploadsBase();
   if (!base) return undefined;
-  // Our backend mounts /uploads to local dir or serves S3 proxied links
   return `${base}/uploads/${raw.replace(/^\/+/, "")}`;
 }
 
