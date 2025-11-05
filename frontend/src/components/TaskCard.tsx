@@ -11,7 +11,7 @@ export type UITask = {
   status: TaskStatus;
   createdAt: string;
   siteId?: string;
-  sectors?: any[]; // can be number[] or [{ sector, requiredTypes, currentIndex, status }]
+  sectors?: any[]; // now includes [{sector, requiredTypes, currentIndex, status}]
   sectorProgress?: Record<string, { done: number; total: number }>;
 };
 
@@ -22,11 +22,11 @@ export function TaskCard({
   task: UITask;
   onPreview: (taskId: string) => void;
 }) {
-  const statusClass: Record<TaskStatus, string> = {
-    PENDING: "bg-warning text-warning-foreground",
-    IN_PROGRESS: "bg-info text-info-foreground",
-    DONE: "bg-success text-success-foreground",
-    FAILED: "bg-destructive text-destructive-foreground",
+  const statusColors: Record<string, string> = {
+    PENDING: "bg-yellow-100 text-yellow-800 border-yellow-300",
+    IN_PROGRESS: "bg-blue-100 text-blue-800 border-blue-300",
+    DONE: "bg-green-100 text-green-800 border-green-300",
+    FAILED: "bg-red-100 text-red-800 border-red-300",
   };
 
   const prettyStatus = (s: TaskStatus) =>
@@ -38,28 +38,16 @@ export function TaskCard({
       ? "Completed"
       : "Failed";
 
-  const hasProgress =
-    task.sectorProgress && Object.keys(task.sectorProgress).length > 0;
-
-  // Handle both array of numbers and array of objects
-  const sectorNumbers: number[] = Array.isArray(task.sectors)
+  // Normalize sectors to [{ sector, status }]
+  const sectors = Array.isArray(task.sectors)
     ? task.sectors.map((s: any) =>
-        typeof s === "object" && s !== null ? Number(s.sector) : Number(s)
+        typeof s === "object" && s !== null
+          ? { sector: Number(s.sector), status: s.status || "PENDING" }
+          : { sector: Number(s), status: "PENDING" }
       )
     : [];
 
-  const sortedSectors = sectorNumbers.filter(Boolean).sort((a, b) => a - b);
-
-  // Build chip data
-  const chips = sortedSectors.map((s) => {
-    const sp = task.sectorProgress?.[String(s)];
-    let label = `S${s}`;
-    if (sp && sp.total > 0) {
-      const pct = Math.round((sp.done / sp.total) * 100);
-      label = `${label} • ${pct}%`;
-    }
-    return { sector: s, label };
-  });
+  const sortedSectors = sectors.sort((a, b) => a.sector - b.sector);
 
   return (
     <Card className="flex flex-col">
@@ -68,7 +56,9 @@ export function TaskCard({
           <CardTitle className="text-base font-semibold min-w-0 truncate">
             {task.title}
           </CardTitle>
-          <Badge className={`${statusClass[task.status]} ml-auto`}>
+          <Badge
+            className={`${statusColors[task.status]} ml-auto font-medium border`}
+          >
             {prettyStatus(task.status)}
           </Badge>
         </div>
@@ -96,22 +86,17 @@ export function TaskCard({
           )}
         </div>
 
-        {/* Sector badges */}
+        {/* Sector badges with status */}
         {sortedSectors.length > 0 && (
-          <div className="mt-2">
+          <div className="mt-3">
             <div className="mb-1 text-foreground font-medium">Sectors</div>
             <div className="flex flex-wrap gap-2">
-              {chips.map((c) => (
+              {sortedSectors.map((s) => (
                 <Badge
-                  key={c.sector}
-                  variant={hasProgress ? "default" : "secondary"}
-                  className={
-                    hasProgress
-                      ? "bg-primary/10 text-primary border border-primary/20"
-                      : ""
-                  }
+                  key={s.sector}
+                  className={`${statusColors[s.status || "PENDING"]} border`}
                 >
-                  {c.label}
+                  S{s.sector} • {prettyStatus(s.status as TaskStatus)}
                 </Badge>
               ))}
             </div>
