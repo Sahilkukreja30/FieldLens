@@ -6,14 +6,12 @@ type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
 
 export type UITask = {
   id: string;
-  title: string;          // "Job • <phone>"
+  title: string;
   phoneNumber: string;
   status: TaskStatus;
   createdAt: string;
   siteId?: string;
-  sectors?: number[];
-  // NEW (optional): sector-wise progress summary if backend provides it
-  // Example: { "2": { done: 8, total: 14 }, "4": { done: 14, total: 14 } }
+  sectors?: any[]; // can be number[] or [{ sector, requiredTypes, currentIndex, status }]
   sectorProgress?: Record<string, { done: number; total: number }>;
 };
 
@@ -43,11 +41,16 @@ export function TaskCard({
   const hasProgress =
     task.sectorProgress && Object.keys(task.sectorProgress).length > 0;
 
-  const sortedSectors: number[] = Array.isArray(task.sectors)
-    ? [...task.sectors].sort((a, b) => a - b)
+  // Handle both array of numbers and array of objects
+  const sectorNumbers: number[] = Array.isArray(task.sectors)
+    ? task.sectors.map((s: any) =>
+        typeof s === "object" && s !== null ? Number(s.sector) : Number(s)
+      )
     : [];
 
-  // Build chip data: sector label + optional percentage
+  const sortedSectors = sectorNumbers.filter(Boolean).sort((a, b) => a - b);
+
+  // Build chip data
   const chips = sortedSectors.map((s) => {
     const sp = task.sectorProgress?.[String(s)];
     let label = `S${s}`;
@@ -74,7 +77,8 @@ export function TaskCard({
       <CardContent className="flex-1 flex flex-col gap-3 text-sm text-muted-foreground">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div className="break-all">
-            <span className="font-medium text-foreground">Job Id:</span> {task.id}
+            <span className="font-medium text-foreground">Job Id:</span>{" "}
+            {task.id}
           </div>
           <div className="break-all">
             <span className="font-medium text-foreground">Phone:</span>{" "}
@@ -92,7 +96,7 @@ export function TaskCard({
           )}
         </div>
 
-        {/* NEW: Sector progress chips row */}
+        {/* Sector badges */}
         {sortedSectors.length > 0 && (
           <div className="mt-2">
             <div className="mb-1 text-foreground font-medium">Sectors</div>
