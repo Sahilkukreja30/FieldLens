@@ -60,21 +60,18 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
   const sectorsFromJob = useMemo<number[]>(() => {
     const j: any = data?.job;
     if (!j) return [];
-    // New shape: array of sector blocks
     if (Array.isArray(j.sectors) && j.sectors.length) {
       return j.sectors
         .map((b: any) => Number((b && (b.sector ?? b)) ?? NaN))
         .filter((n) => Number.isFinite(n))
         .sort((a, b) => a - b);
     }
-    // Map shape (rare)
     if (isRecord(j.sectorJobs)) {
       return Object.keys(j.sectorJobs)
         .map((k) => Number(k))
         .filter((n) => Number.isFinite(n))
         .sort((a, b) => a - b);
     }
-    // Legacy single sector
     if (typeof j.sector === "number") return [j.sector];
     return [];
   }, [data?.job]);
@@ -92,7 +89,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     const j: any = data?.job;
     if (!j) return null;
 
-    // Prefer array of sector blocks
     if (selectedSector != null && Array.isArray(j.sectors)) {
       const found = j.sectors.find((b: any) => Number(b?.sector) === Number(selectedSector));
       if (found && isRecord(found)) {
@@ -105,7 +101,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       }
     }
 
-    // Legacy single sector on root
     if (selectedSector == null && (j.requiredTypes || j.currentIndex != null)) {
       return {
         sector: typeof j.sector === "number" ? j.sector : 0,
@@ -115,21 +110,18 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       };
     }
 
-    // Fallback
     return selectedSector != null
       ? { sector: selectedSector, requiredTypes: Array.isArray(j.requiredTypes) ? j.requiredTypes : undefined }
       : null;
   }, [data?.job, selectedSector]);
 
-  /** Latest photo per type (so grid renders by requiredTypes instead of raw photos) */
+  /** Latest photo per type */
   const latestByType = useMemo(() => {
     const map = new Map<string, PhotoItem>();
     const photos = Array.isArray(data?.photos) ? (data!.photos as PhotoItem[]) : [];
     for (const p of photos) {
       const t = (p.type || "").toUpperCase();
-      // If multiple photos exist, keep the last one encountered (assuming API returns chronological)
-      if (!map.has(t)) map.set(t, p);
-      else map.set(t, p); // simple overwrite; last wins
+      map.set(t, p); // last wins (assuming API sorted)
     }
     return map;
   }, [data?.photos]);
@@ -192,7 +184,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     }
     const j: any = data?.job;
     if (Array.isArray(j?.requiredTypes) && j.requiredTypes.length) return j.requiredTypes;
-    return []; // if nothing available, grid would show "No photos yet"
+    return [];
   }, [sectorBlock?.requiredTypes, data?.job]);
 
   return (
@@ -205,33 +197,34 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
           </DialogTitle>
         </DialogHeader>
 
-        {/* Top controls */}
-        <div className="px-6 pb-3 flex items-center justify-between gap-3">
-          <TabsList className="grid w-full max-w-xs grid-cols-2">
-            <TabsTrigger value="images">Images</TabsTrigger>
-            <TabsTrigger value="excel">Excel</TabsTrigger>
-          </TabsList>
-
-          {sectorsFromJob.length > 1 && (
-            <Select
-              value={selectedSector != null ? String(selectedSector) : undefined}
-              onValueChange={(v) => setSelectedSector(Number(v))}
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue placeholder="Select sector" />
-              </SelectTrigger>
-              <SelectContent>
-                {sectorsFromJob.map((s) => (
-                  <SelectItem key={s} value={String(s)}>
-                    Sector {s}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
-
+        {/* Tabs now wrap BOTH the header controls and the content panes */}
         <Tabs defaultValue="images" className="flex-1 flex flex-col min-h-0">
+          {/* Top controls INSIDE Tabs */}
+          <div className="px-6 pb-3 flex items-center justify-between gap-3">
+            <TabsList className="grid w-full max-w-xs grid-cols-2">
+              <TabsTrigger value="images">Images</TabsTrigger>
+              <TabsTrigger value="excel">Excel</TabsTrigger>
+            </TabsList>
+
+            {sectorsFromJob.length > 1 && (
+              <Select
+                value={selectedSector != null ? String(selectedSector) : undefined}
+                onValueChange={(v) => setSelectedSector(Number(v))}
+              >
+                <SelectTrigger className="w-44">
+                  <SelectValue placeholder="Select sector" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sectorsFromJob.map((s) => (
+                    <SelectItem key={s} value={String(s)}>
+                      Sector {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
           {/* -------- Images -------- */}
           <TabsContent value="images" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6">
@@ -244,8 +237,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
 
               {!loading && !err && (
                 <>
-                  {/* If we know the required types, render one tile per type.
-                      Otherwise fall back to showing raw photos (legacy). */}
                   {requiredTypesForGrid.length > 0 ? (
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                       {requiredTypesForGrid.map((t) => {
@@ -280,7 +271,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                               )}
                             </div>
 
-                            {/* Inline rename only when a real photo exists */}
                             {photo && editingImage === photo.id ? (
                               <Input
                                 defaultValue={imageNames[photo.id] || caption}
