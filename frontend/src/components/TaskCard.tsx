@@ -1,112 +1,109 @@
+// src/components/TaskCard.tsx
+import React, { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import { Eye, Archive } from "lucide-react";
+import { downloadJobZip, type BackendJob } from "@/lib/api";
 
-type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
-
-export type UITask = {
-  id: string;
-  title: string;
-  phoneNumber: string;
-  status: TaskStatus;
-  createdAt: string;
-  siteId?: string;
-  sectors?: any[]; // now includes [{sector, requiredTypes, currentIndex, status}]
-  sectorProgress?: Record<string, { done: number; total: number }>;
+type Props = {
+  job: BackendJob;
+  onPreview: (jobId: string) => void;
 };
 
-export function TaskCard({
-  task,
-  onPreview,
-}: {
-  task: UITask;
-  onPreview: (taskId: string) => void;
-}) {
-  const statusColors: Record<string, string> = {
-    PENDING: "bg-yellow-100 text-yellow-800 border-yellow-300",
-    IN_PROGRESS: "bg-blue-100 text-blue-800 border-blue-300",
-    DONE: "bg-green-100 text-green-800 border-green-300",
-    FAILED: "bg-red-100 text-red-800 border-red-300",
-  };
+function allSectorsDone(job: BackendJob): boolean {
+  if (Array.isArray(job.sectors) && job.sectors.length) {
+    return job.sectors.every((s) => s.status === "DONE");
+  }
+  // legacy single-sector
+  return job.status === "DONE";
+}
 
-  const prettyStatus = (s: TaskStatus) =>
-    s === "PENDING"
-      ? "Pending"
-      : s === "IN_PROGRESS"
-      ? "In Progress"
-      : s === "DONE"
-      ? "Completed"
-      : "Failed";
+export default function TaskCard({ job, onPreview }: Props) {
+  const [sectorForZip, setSectorForZip] = useState<string>("");
 
-  // Normalize sectors to [{ sector, status }]
-  const sectors = Array.isArray(task.sectors)
-    ? task.sectors.map((s: any) =>
-        typeof s === "object" && s !== null
-          ? { sector: Number(s.sector), status: s.status || "PENDING" }
-          : { sector: Number(s), status: "PENDING" }
-      )
-    : [];
+  const sectorList = useMemo(() => {
+    if (Array.isArray(job.sectors) && job.sectors.length) {
+      return job.sectors.map((s) => s.sector).sort((a, b) => a - b);
+    }
+    return typeof job.sector === "number" ? [job.sector] : [];
+  }, [job]);
 
-  const sortedSectors = sectors.sort((a, b) => a.sector - b.sector);
+  const jobDone = allSectorsDone(job);
+  const anyDoneSectors = useMemo(() => {
+    if (Array.isArray(job.sectors) && job.sectors.length) {
+      return job.sectors.filter((s) => s.status === "DONE").map((s) => s.sector);
+    }
+    return job.status === "DONE" && typeof job.sector === "number" ? [job.sector] : [];
+  }, [job]);
 
   return (
-    <Card className="flex flex-col">
-      <CardHeader className="pb-3">
-        <div className="flex items-start gap-3">
-          <CardTitle className="text-base font-semibold min-w-0 truncate">
-            {task.title}
-          </CardTitle>
-          <Badge
-            className={`${statusColors[task.status]} ml-auto font-medium border`}
-          >
-            {prettyStatus(task.status)}
-          </Badge>
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <div>
+          <CardTitle className="text-base">Site: {job.siteId ?? "—"}</CardTitle>
+          <div className="text-xs text-muted-foreground">{job.workerPhone}</div>
+        </div>
+        <div className="text-xs">
+          {Array.isArray(job.sectors) ? (
+            <span>{job.sectors.length} sector(s)</span>
+          ) : (
+            <span>Sector: {typeof job.sector === "number" ? job.sector : "—"}</span>
+          )}
         </div>
       </CardHeader>
-
-      <CardContent className="flex-1 flex flex-col gap-3 text-sm text-muted-foreground">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <div className="break-all">
-            <span className="font-medium text-foreground">Job Id:</span>{" "}
-            {task.id}
-          </div>
-          <div className="break-all">
-            <span className="font-medium text-foreground">Phone:</span>{" "}
-            {task.phoneNumber}
-          </div>
-          <div>
-            <span className="font-medium text-foreground">Created:</span>{" "}
-            {new Date(task.createdAt).toLocaleString()}
-          </div>
-          {task.siteId && (
-            <div className="break-all">
-              <span className="font-medium text-foreground">Site ID:</span>{" "}
-              {task.siteId}
-            </div>
+      <CardContent className="flex items-center justify-between gap-3">
+        <div className="text-sm">
+          Status:&nbsp;
+          {Array.isArray(job.sectors) && job.sectors.length ? (
+            <span>
+              {job.sectors.map((s) => (
+                <span key={s.sector} className="mr-2">
+                  <b>Sec {s.sector}</b>: {s.status}
+                </span>
+              ))}
+            </span>
+          ) : (
+            <b>{job.status}</b>
           )}
         </div>
 
-        {/* Sector badges with status */}
-        {sortedSectors.length > 0 && (
-          <div className="mt-3">
-            <div className="mb-1 text-foreground font-medium">Sectors</div>
-            <div className="flex flex-wrap gap-2">
-              {sortedSectors.map((s) => (
-                <Badge
-                  key={s.sector}
-                  className={`${statusColors[s.status || "PENDING"]} border`}
-                >
-                  S{s.sector} • {prettyStatus(s.status as TaskStatus)}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="mt-3">
-          <Button size="sm" onClick={() => onPreview(task.id)}>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => onPreview(job.id)}>
+            <Eye className="w-4 h-4 mr-2" />
             Preview
           </Button>
+
+          {/* Export ZIP controls */}
+          {jobDone ? (
+            <Button size="sm" onClick={() => downloadJobZip(job.id)}>
+              <Archive className="w-4 h-4 mr-2" />
+              Export ZIP (All)
+            </Button>
+          ) : anyDoneSectors.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <Select value={sectorForZip} onValueChange={setSectorForZip}>
+                <SelectTrigger className="w-36">
+                  <SelectValue placeholder="Export sector…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {anyDoneSectors.map((sec) => (
+                    <SelectItem key={sec} value={String(sec)}>
+                      Sector {sec}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                disabled={!sectorForZip}
+                onClick={() => downloadJobZip(job.id, Number(sectorForZip))}
+              >
+                <Archive className="w-4 h-4 mr-2" />
+                Export ZIP
+              </Button>
+            </div>
+          ) : null}
         </div>
       </CardContent>
     </Card>

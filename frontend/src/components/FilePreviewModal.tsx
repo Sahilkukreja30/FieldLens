@@ -5,12 +5,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, Edit3, Image as ImageIcon, ImageOff } from "lucide-react";
+import { Download, Edit3, Image as ImageIcon, ImageOff, Archive } from "lucide-react";
 
 import {
   fetchJobDetail,
   downloadJobXlsx,
   downloadJobXlsxWithImages,
+  downloadJobZip,
   type JobDetail,
   type PhotoItem,
 } from "@/lib/api";
@@ -33,22 +34,19 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Turn a PhotoItem into a fetchable URL (works with private S3 via backend redirect). */
 function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
   if (!p) return undefined;
   const raw = (p as any).s3Url || (p as any).s3Key || "";
   if (!raw) return undefined;
-  if (/^https?:\/\//i.test(raw)) return raw; // already public URL
+  if (/^https?:\/\//i.test(raw)) return raw;
   const base = (api.defaults.baseURL || import.meta.env.VITE_API_URL || "").replace(/\/api\/?$/, "");
   return `${base}/api/photos/${encodeURIComponent((p as any).id)}/raw`;
 }
 
-/** Prefer explicit photo.sector, else parse from key/url using `sec{n}_` (new key format). */
 function getPhotoSector(p: any): number | null {
   if (typeof p?.sector === "number" && Number.isFinite(p.sector)) return p.sector;
   const src: string = String(p?.s3Key || p?.s3Url || "");
   if (!src) return null;
-  // match .../sec3_... or _sec2- / .sec4. or -sec1_ etc.
   const m = src.toLowerCase().match(/(?:^|[\/_.-])sec(\d+)(?:[_\/.-]|$)/i);
   if (m && m[1]) {
     const n = Number(m[1]);
@@ -65,6 +63,9 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
   const [imageNames, setImageNames] = useState<Record<string, string>>({});
   const [editingImage, setEditingImage] = useState<string | null>(null);
 
+  const [selectedSector, setSelectedSector] = useState<number | null>(null);
+
+  // load job initially (without sector filter; we need sector list)
   useEffect(() => {
     if (!isOpen || !taskId) return;
     setLoading(true);
@@ -79,7 +80,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       .finally(() => setLoading(false));
   }, [isOpen, taskId]);
 
-  /** All sector numbers present on the job */
+  // derive sector list from job
   const sectorsFromJob = useMemo<number[]>(() => {
     const j: any = data?.job;
     if (!j) return [];
@@ -99,14 +100,30 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     return [];
   }, [data?.job]);
 
-  const [selectedSector, setSelectedSector] = useState<number | null>(null);
+  // when sector changes, refetch photos sector-wise (so backend can filter)
+  useEffect(() => {
+    if (!isOpen || !taskId) return;
+    if (selectedSector == null) return;
+    (async () => {
+      try {
+        setLoading(true);
+        const res = await fetchJobDetail(taskId, selectedSector);
+        setData(res);
+      } catch (e: any) {
+        setErr(e?.message ?? "Failed to load sector photos");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [isOpen, taskId, selectedSector]);
+
+  // default sector selection
   useEffect(() => {
     if (!isOpen) return;
     if (sectorsFromJob.length === 0) setSelectedSector(null);
     else setSelectedSector((prev) => (prev != null && sectorsFromJob.includes(prev) ? prev : sectorsFromJob[0]));
   }, [isOpen, sectorsFromJob.join(",")]);
 
-  /** Sector details for header + excel table */
   const sectorBlock: SectorBlock | null = useMemo(() => {
     const j: any = data?.job;
     if (!j) return null;
@@ -137,32 +154,24 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       : null;
   }, [data?.job, selectedSector]);
 
-  /** Map: sector -> (type -> latest PhotoItem) */
   const latestByTypeForSector = useMemo(() => {
     const out = new Map<number, Map<string, PhotoItem>>();
     const photos = Array.isArray(data?.photos) ? (data!.photos as PhotoItem[]) : [];
-    // old → new, so the last write wins for a type/sector
     for (const p of photos) {
       const t = (p.type || "").toUpperCase();
       const sec = getPhotoSector(p);
-      if (!Number.isFinite(sec)) continue; // if unknown, skip for strictness
+      if (!Number.isFinite(sec)) continue;
       if (!out.has(sec!)) out.set(sec!, new Map());
       out.get(sec!)!.set(t, p);
     }
     return out;
   }, [data?.photos]);
 
-  /** Strict getter: only return photo for the currently selected sector */
   function getLatestForType(t: string): PhotoItem | undefined {
     const key = String(t || "").toUpperCase();
-
-    // If the job has multiple sectors, we enforce strict sector matching.
     if (selectedSector != null) {
-      const mapForThisSector = latestByTypeForSector.get(selectedSector);
-      return mapForThisSector?.get(key);
+      return latestByTypeForSector.get(selectedSector)?.get(key);
     }
-
-    // Single-sector job (no selection UI) – try any available sector.
     for (const [, m] of latestByTypeForSector) {
       const hit = m.get(key);
       if (hit) return hit;
@@ -170,7 +179,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     return undefined;
   }
 
-  /** Excel rows */
   const rows = useMemo(() => {
     const j: any = data?.job ?? {};
     const created = j.createdAt ?? "—";
@@ -216,11 +224,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     ];
   }, [data?.job, data?.photos, sectorBlock, taskId]);
 
-  const handleImageNameEdit = (id: string, value: string) => {
-    setImageNames((prev) => ({ ...prev, [id]: value.trim() }));
-    setEditingImage(null);
-  };
-
   const requiredTypesForGrid = useMemo<string[]>(() => {
     if (Array.isArray(sectorBlock?.requiredTypes) && sectorBlock!.requiredTypes!.length) {
       return sectorBlock!.requiredTypes!;
@@ -229,6 +232,12 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     if (Array.isArray(j?.requiredTypes) && j.requiredTypes.length) return j.requiredTypes;
     return [];
   }, [sectorBlock?.requiredTypes, data?.job]);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const handleImageNameEdit = (id: string, value: string) => {
+    setImageNames((prev) => ({ ...prev, [id]: value.trim() }));
+    setEditingId(null);
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -241,40 +250,69 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
         </DialogHeader>
 
         <Tabs defaultValue="images" className="flex-1 flex flex-col min-h-0">
-          <div className="px-6 pb-3 flex items-center justify-between gap-3">
+          <div className="px-6 pb-3 flex items-center gap-3 justify-between">
             <TabsList className="grid w-full max-w-xs grid-cols-2">
               <TabsTrigger value="images">Images</TabsTrigger>
               <TabsTrigger value="excel">Excel</TabsTrigger>
             </TabsList>
 
-            {sectorsFromJob.length > 1 && (
-              <Select
-                value={selectedSector != null ? String(selectedSector) : undefined}
-                onValueChange={(v) => setSelectedSector(Number(v))}
+            <div className="flex items-center gap-2">
+              {sectorsFromJob.length > 1 && (
+                <Select
+                  value={selectedSector != null ? String(selectedSector) : undefined}
+                  onValueChange={(v) => setSelectedSector(Number(v))}
+                >
+                  <SelectTrigger className="w-44">
+                    <SelectValue placeholder="Select sector" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sectorsFromJob.map((s) => (
+                      <SelectItem key={s} value={String(s)}>
+                        Sector {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+
+              {/* Export buttons (sector-aware) */}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => downloadJobXlsx(taskId, selectedSector ?? undefined)}
+                disabled={!data || loading}
+                title="Export XLSX (sector-aware)"
               >
-                <SelectTrigger className="w-44">
-                  <SelectValue placeholder="Select sector" />
-                </SelectTrigger>
-                <SelectContent>
-                  {sectorsFromJob.map((s) => (
-                    <SelectItem key={s} value={String(s)}>
-                      Sector {s}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+                <Download className="w-4 h-4 mr-2" />
+                XLSX
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => downloadJobXlsxWithImages(taskId, selectedSector ?? undefined)}
+                disabled={!data || loading}
+                title="Export XLSX with embedded images (sector-aware)"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                XLSX + Images
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => downloadJobZip(taskId, selectedSector ?? undefined)}
+                disabled={!data || loading}
+                title="Export ZIP of images (sector-aware)"
+              >
+                <Archive className="w-4 h-4 mr-2" />
+                ZIP
+              </Button>
+            </div>
           </div>
 
-          {/* IMAGES */}
+          {/* Images Tab */}
           <TabsContent value="images" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6">
-              {loading && (
-                <div className="rounded-lg border bg-muted p-6 text-muted-foreground">Loading details…</div>
-              )}
-              {err && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">{err}</div>
-              )}
+              {loading && <div className="rounded-lg border bg-muted p-6 text-muted-foreground">Loading details…</div>}
+              {err && <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">{err}</div>}
 
               {!loading && !err && (
                 <>
@@ -289,12 +327,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                           <figure key={t} className="shrink-0 w-32">
                             <div className="relative group">
                               {imgUrl ? (
-                                <img
-                                  src={imgUrl}
-                                  alt={caption}
-                                  className="w-32 h-32 object-cover rounded-md border"
-                                  loading="lazy"
-                                />
+                                <img src={imgUrl} alt={caption} className="w-32 h-32 object-cover rounded-md border" loading="lazy" />
                               ) : (
                                 <div className="w-32 h-32 rounded-md border bg-muted/40 flex items-center justify-center">
                                   <ImageOff className="w-6 h-6 opacity-60" />
@@ -302,34 +335,25 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                               )}
                               {photo && (
                                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-center justify-center">
-                                  <Button
-                                    size="sm"
-                                    variant="secondary"
-                                    onClick={() => setEditingImage((photo as any).id)}
-                                  >
+                                  <Button size="sm" variant="secondary" onClick={() => setEditingId((photo as any).id)}>
                                     <Edit3 className="w-3 h-3" />
                                   </Button>
                                 </div>
                               )}
                             </div>
 
-                            {photo && editingImage === (photo as any).id ? (
+                            {photo && editingId === (photo as any).id ? (
                               <Input
                                 defaultValue={imageNames[(photo as any).id] || caption}
                                 onBlur={(e) => handleImageNameEdit((photo as any).id, e.target.value)}
                                 onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    handleImageNameEdit((photo as any).id, (e.target as HTMLInputElement).value);
-                                  }
+                                  if (e.key === "Enter") handleImageNameEdit((photo as any).id, (e.target as HTMLInputElement).value);
                                 }}
                                 className="mt-1 h-7 text-xs"
                                 autoFocus
                               />
                             ) : (
-                              <figcaption
-                                className="mt-1 text-xs text-muted-foreground truncate"
-                                title={imgUrl || caption}
-                              >
+                              <figcaption className="mt-1 text-xs text-muted-foreground truncate" title={imgUrl || caption}>
                                 {photo ? imageNames[(photo as any).id] || caption : `${caption} (missing)`}
                               </figcaption>
                             )}
@@ -346,31 +370,24 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                           <figure key={image.id} className="shrink-0 w-32">
                             <div className="relative group">
                               {imgUrl ? (
-                                <img
-                                  src={imgUrl}
-                                  alt={caption}
-                                  className="w-32 h-32 object-cover rounded-md border"
-                                  loading="lazy"
-                                />
+                                <img src={imgUrl} alt={caption} className="w-32 h-32 object-cover rounded-md border" loading="lazy" />
                               ) : (
                                 <div className="w-32 h-32 rounded-md border bg-muted/40 flex items-center justify-center">
                                   <ImageOff className="w-6 h-6 opacity-60" />
                                 </div>
                               )}
                               <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-center justify-center">
-                                <Button size="sm" variant="secondary" onClick={() => setEditingImage(image.id)}>
+                                <Button size="sm" variant="secondary" onClick={() => setEditingId(image.id)}>
                                   <Edit3 className="w-3 h-3" />
                                 </Button>
                               </div>
                             </div>
-                            {editingImage === image.id ? (
+                            {editingId === image.id ? (
                               <Input
                                 defaultValue={imageNames[image.id] || caption}
                                 onBlur={(e) => handleImageNameEdit(image.id, e.target.value)}
                                 onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    handleImageNameEdit(image.id, (e.target as HTMLInputElement).value);
-                                  }
+                                  if (e.key === "Enter") handleImageNameEdit(image.id, (e.target as HTMLInputElement).value);
                                 }}
                                 className="mt-1 h-7 text-xs"
                                 autoFocus
@@ -392,23 +409,9 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
             </div>
           </TabsContent>
 
-          {/* EXCEL */}
+          {/* Excel Tab */}
           <TabsContent value="excel" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-medium">Job Report Data</h3>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => downloadJobXlsx(taskId)} disabled={!data || loading}>
-                    <Download className="w-4 h-4 mr-2" />
-                    Download Excel
-                  </Button>
-                  <Button size="sm" onClick={() => downloadJobXlsxWithImages(taskId)} disabled={!data || loading}>
-                    <Download className="w-4 h-4 mr-2" />
-                    Download Excel (with images)
-                  </Button>
-                </div>
-              </div>
-
               <div className="border rounded-lg overflow-hidden">
                 <table className="w-full">
                   <thead className="bg-muted">
@@ -439,7 +442,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
           </TabsContent>
         </Tabs>
 
-        {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 px-6 pb-6 border-t">
           <Button variant="outline" onClick={onClose}>
             Close
