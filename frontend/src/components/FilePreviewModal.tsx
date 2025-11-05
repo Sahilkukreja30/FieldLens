@@ -5,16 +5,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, Edit3, Image as ImageIcon, ImageOff } from "lucide-react";
+import { Download, Edit3, Image as ImageIcon, ImageOff, Archive } from "lucide-react";
 
 import {
   fetchJobDetail,
   downloadJobXlsx,
   downloadJobXlsxWithImages,
+  // NEW sector-wise helpers (ensure these exist in api.ts)
+  downloadSectorExcel,
+  downloadJobZip,
   type JobDetail,
   type PhotoItem,
+  api,
 } from "@/lib/api";
-import { api } from "@/lib/api";
 
 type Props = {
   isOpen: boolean;
@@ -33,7 +36,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Turn a PhotoItem into a fetchable URL (works with private S3 via backend redirect). */
+/** Build a fetchable URL for a private S3 object via backend redirect. */
 function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
   if (!p) return undefined;
   const raw = (p as any).s3Url || (p as any).s3Key || "";
@@ -43,12 +46,11 @@ function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
   return `${base}/api/photos/${encodeURIComponent((p as any).id)}/raw`;
 }
 
-/** Prefer explicit photo.sector, else parse from key/url using `sec{n}_` (new key format). */
+/** Prefer explicit photo.sector; else parse from key/url using `sec{n}_`. */
 function getPhotoSector(p: any): number | null {
   if (typeof p?.sector === "number" && Number.isFinite(p.sector)) return p.sector;
   const src: string = String(p?.s3Key || p?.s3Url || "");
   if (!src) return null;
-  // match .../sec3_... or _sec2- / .sec4. or -sec1_ etc.
   const m = src.toLowerCase().match(/(?:^|[\/_.-])sec(\d+)(?:[_\/.-]|$)/i);
   if (m && m[1]) {
     const n = Number(m[1]);
@@ -79,7 +81,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       .finally(() => setLoading(false));
   }, [isOpen, taskId]);
 
-  /** All sector numbers present on the job */
+  /** Sectors on job */
   const sectorsFromJob = useMemo<number[]>(() => {
     const j: any = data?.job;
     if (!j) return [];
@@ -106,7 +108,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     else setSelectedSector((prev) => (prev != null && sectorsFromJob.includes(prev) ? prev : sectorsFromJob[0]));
   }, [isOpen, sectorsFromJob.join(",")]);
 
-  /** Sector details for header + excel table */
+  /** Sector card for header/excel */
   const sectorBlock: SectorBlock | null = useMemo(() => {
     const j: any = data?.job;
     if (!j) return null;
@@ -141,28 +143,22 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
   const latestByTypeForSector = useMemo(() => {
     const out = new Map<number, Map<string, PhotoItem>>();
     const photos = Array.isArray(data?.photos) ? (data!.photos as PhotoItem[]) : [];
-    // old → new, so the last write wins for a type/sector
     for (const p of photos) {
       const t = (p.type || "").toUpperCase();
       const sec = getPhotoSector(p);
-      if (!Number.isFinite(sec)) continue; // if unknown, skip for strictness
+      if (!Number.isFinite(sec)) continue;
       if (!out.has(sec!)) out.set(sec!, new Map());
       out.get(sec!)!.set(t, p);
     }
     return out;
   }, [data?.photos]);
 
-  /** Strict getter: only return photo for the currently selected sector */
   function getLatestForType(t: string): PhotoItem | undefined {
     const key = String(t || "").toUpperCase();
-
-    // If the job has multiple sectors, we enforce strict sector matching.
     if (selectedSector != null) {
       const mapForThisSector = latestByTypeForSector.get(selectedSector);
       return mapForThisSector?.get(key);
     }
-
-    // Single-sector job (no selection UI) – try any available sector.
     for (const [, m] of latestByTypeForSector) {
       const hit = m.get(key);
       if (hit) return hit;
@@ -229,6 +225,8 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     if (Array.isArray(j?.requiredTypes) && j.requiredTypes.length) return j.requiredTypes;
     return [];
   }, [sectorBlock?.requiredTypes, data?.job]);
+
+  const canSectorDownload = selectedSector != null && Number.isFinite(selectedSector);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -395,16 +393,36 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
           {/* EXCEL */}
           <TabsContent value="excel" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6 space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-3">
                 <h3 className="font-medium">Job Report Data</h3>
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Whole Job */}
                   <Button size="sm" variant="outline" onClick={() => downloadJobXlsx(taskId)} disabled={!data || loading}>
                     <Download className="w-4 h-4 mr-2" />
-                    Download Excel
+                    Excel (All)
                   </Button>
-                  <Button size="sm" onClick={() => downloadJobXlsxWithImages(taskId)} disabled={!data || loading}>
+                  <Button size="sm" variant="outline" onClick={() => downloadJobXlsxWithImages(taskId)} disabled={!data || loading}>
                     <Download className="w-4 h-4 mr-2" />
-                    Download Excel (with images)
+                    Excel + Images (All)
+                  </Button>
+
+                  {/* Sector-wise — enabled only when a sector is selected */}
+                  <Button
+                    size="sm"
+                    onClick={() => selectedSector != null && downloadSectorExcel(taskId, selectedSector)}
+                    disabled={!data || loading || !canSectorDownload}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Excel (Sector)
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => selectedSector != null && downloadJobZip(taskId, selectedSector)}
+                    disabled={!data || loading || !canSectorDownload}
+                  >
+                    <Archive className="w-4 h-4 mr-2" />
+                    ZIP (Sector)
                   </Button>
                 </div>
               </div>

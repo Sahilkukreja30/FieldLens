@@ -77,6 +77,22 @@ export async function createJob(input: {
   return data;
 }
 
+export async function downloadSectorExcel(jobId: string, sector?: number) {
+  const { data } = await api.get(`/exports/sector.xlsx`, {
+    params: sector != null ? { jobId, sector } : { jobId },
+    responseType: "blob",
+  });
+
+  const url = window.URL.createObjectURL(new Blob([data]));
+  const link = document.createElement("a");
+  const suffix = sector != null ? `_sec${sector}` : "";
+  link.href = url;
+  link.setAttribute("download", `job_${jobId}${suffix}_sector.xlsx`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
 export async function downloadJobXlsx(id: string) {
   const { data } = await api.get(`/jobs/${id}/export.xlsx`, {
     responseType: "blob",
@@ -89,18 +105,21 @@ export async function downloadJobXlsx(id: string) {
   link.click();
   link.remove();
 }
-export async function downloadJobZip(id: string) {
-  const { data } = await api.get(`/jobs/${encodeURIComponent(id)}/export.zip`, {
+export async function downloadJobZip(jobId: string, sector?: number) {
+  const { data } = await api.get(`/jobs/${encodeURIComponent(jobId)}/export.zip`, {
+    params: sector != null ? { sector } : undefined,
     responseType: "blob",
   });
-  const url = URL.createObjectURL(new Blob([data], { type: "application/zip" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `job_${id}.zip`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+
+  const url = window.URL.createObjectURL(new Blob([data], { type: "application/zip" }));
+  const link = document.createElement("a");
+  const suffix = sector != null ? `_sec${sector}` : "";
+  link.href = url;
+  link.setAttribute("download", `job_${jobId}${suffix}.zip`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export async function downloadJobXlsxWithImages(id: string) {
