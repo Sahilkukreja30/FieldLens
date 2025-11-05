@@ -33,25 +33,61 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Get a usable IMG URL from a PhotoItem even when we only have an S3 key/URI.
- * Uses backend redirect: /api/photos/:photoId/raw — works with private S3.
- */
+/** Base URL to build /uploads links when photos only have keys */
+function uploadsBase(): string {
+  // api.defaults.baseURL is something like https://api.example.com/api
+  const fromAxios = api.defaults.baseURL || import.meta.env.VITE_API_URL || "";
+  if (!fromAxios) return "";
+  try {
+    const u = new URL(fromAxios);
+    // strip trailing /api if present
+    const pathname = u.pathname.replace(/\/api\/?$/, "");
+    u.pathname = pathname || "/";
+    return u.toString().replace(/\/$/, ""); // no trailing slash
+  } catch {
+    return "";
+  }
+}
+
+function s3ToHttp(raw: string): string | undefined {
+  // raw like: s3://<bucket>/<key...>
+  const stripped = raw.replace(/^s3:\/\//i, "");
+  const firstSlash = stripped.indexOf("/");
+  if (firstSlash <= 0) return undefined;
+
+  const bucket = stripped.slice(0, firstSlash);
+  const key = stripped.slice(firstSlash + 1).replace(/^\/+/, "");
+
+  const base =
+    import.meta.env.VITE_S3_PUBLIC_BASE ||
+    (import.meta.env.VITE_AWS_REGION
+      ? `https://${bucket}.s3.${import.meta.env.VITE_AWS_REGION}.amazonaws.com`
+      : `https://${bucket}.s3.amazonaws.com`);
+
+  return `${base}/${key}`;
+}
+
+/** Get a usable IMG URL from a PhotoItem that may only have a key */
 function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
   if (!p) return undefined;
+
   const raw = (p as any).s3Url || (p as any).s3Key || "";
   if (!raw) return undefined;
 
-  // If backend already returned a full HTTP(S) URL, use it.
+  // If backend already returned a full HTTP(S) URL, use it as-is.
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  // Otherwise route through our backend (private S3 safe):
+  // For any s3:// URI or bare key, fetch via our backend redirect endpoint.
+  // (This works for both private buckets and local dev.)
   const base = (api.defaults.baseURL || import.meta.env.VITE_API_URL || "").replace(/\/api\/?$/, "");
-  return `${base}/api/photos/${encodeURIComponent((p as any).id)}/raw`;
+  return `${base}/api/photos/${encodeURIComponent(p.id)}/raw`;
 }
 
-/** Try to infer sector from S3 key/URL: supports -s1_, _s2_, .s3-, etc. */
+
+/** Try to infer sector from key or URL: supports -s1_, _s2_, .s3-, etc. */
 function inferSectorFromKey(urlOrKey: string): number | null {
   const s = urlOrKey.toLowerCase();
+  // common patterns: "-s1_", "_s2_", ".s3_", "-s10-", "_s10-", ".s10."
   const m = s.match(/[\-_.]s(\d+)[\-_\.]/);
   if (m && m[1]) {
     const n = Number(m[1]);
@@ -316,7 +352,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                                   <Button
                                     size="sm"
                                     variant="secondary"
-                                    onClick={() => setEditingImage((photo as any).id)}
+                                    onClick={() => setEditingImage(photo.id)}
                                   >
                                     <Edit3 className="w-3 h-3" />
                                   </Button>
@@ -324,13 +360,13 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                               )}
                             </div>
 
-                            {photo && editingImage === (photo as any).id ? (
+                            {photo && editingImage === photo.id ? (
                               <Input
-                                defaultValue={imageNames[(photo as any).id] || caption}
-                                onBlur={(e) => handleImageNameEdit((photo as any).id, e.target.value)}
+                                defaultValue={imageNames[photo.id] || caption}
+                                onBlur={(e) => handleImageNameEdit(photo.id, e.target.value)}
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") {
-                                    handleImageNameEdit((photo as any).id, (e.target as HTMLInputElement).value);
+                                    handleImageNameEdit(photo.id, (e.target as HTMLInputElement).value);
                                   }
                                 }}
                                 className="mt-1 h-7 text-xs"
@@ -341,7 +377,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                                 className="mt-1 text-xs text-muted-foreground truncate"
                                 title={imgUrl || caption}
                               >
-                                {photo ? imageNames[(photo as any).id] || caption : `${caption} (missing)`}
+                                {photo ? imageNames[photo.id] || caption : `${caption} (missing)`}
                               </figcaption>
                             )}
                           </figure>
@@ -350,7 +386,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                     </div>
                   ) : Array.isArray(data?.photos) && data!.photos.length > 0 ? (
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                      {data!.photos.map((image: any) => {
+                      {data!.photos.map((image) => {
                         const imgUrl = resolvePhotoUrl(image);
                         const caption = (image.type || "").toUpperCase();
                         return (
