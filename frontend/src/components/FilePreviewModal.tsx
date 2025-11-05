@@ -70,22 +70,19 @@ function s3ToHttp(raw: string): string | undefined {
 /** Get a usable IMG URL from a PhotoItem that may only have a key */
 function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
   if (!p) return undefined;
+
   const raw = (p as any).s3Url || (p as any).s3Key || "";
   if (!raw) return undefined;
 
-  // Already a proper URL?
+  // If backend already returned a full HTTP(S) URL, use it as-is.
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  // Is it an s3:// URI?
-  if (/^s3:\/\//i.test(raw)) {
-    return s3ToHttp(raw);
-  }
-
-  // Otherwise treat it as a local key under /uploads
-  const base = uploadsBase();
-  if (!base) return undefined;
-  return `${base}/uploads/${raw.replace(/^\/+/, "")}`;
+  // For any s3:// URI or bare key, fetch via our backend redirect endpoint.
+  // (This works for both private buckets and local dev.)
+  const base = (api.defaults.baseURL || import.meta.env.VITE_API_URL || "").replace(/\/api\/?$/, "");
+  return `${base}/api/photos/${encodeURIComponent(p.id)}/raw`;
 }
+
 
 /** Try to infer sector from key or URL: supports -s1_, _s2_, .s3-, etc. */
 function inferSectorFromKey(urlOrKey: string): number | null {
