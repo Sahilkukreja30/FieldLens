@@ -14,6 +14,7 @@ import {
   type JobDetail,
   type PhotoItem,
 } from "@/lib/api";
+import { api } from "@/lib/api";
 
 type Props = {
   isOpen: boolean;
@@ -30,6 +31,50 @@ type SectorBlock = {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Base URL to build /uploads links when photos only have keys */
+function uploadsBase(): string {
+  // api.defaults.baseURL is something like https://api.example.com/api
+  const fromAxios = api.defaults.baseURL || import.meta.env.VITE_API_URL || "";
+  if (!fromAxios) return "";
+  try {
+    const u = new URL(fromAxios);
+    // strip trailing /api if present
+    const pathname = u.pathname.replace(/\/api\/?$/, "");
+    u.pathname = pathname || "/";
+    return u.toString().replace(/\/$/, ""); // no trailing slash
+  } catch {
+    return "";
+  }
+}
+
+/** Get a usable IMG URL from a PhotoItem that may only have a key */
+function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
+  if (!p) return undefined;
+  const raw = (p as any).s3Url || (p as any).s3Key || "";
+  if (!raw) return undefined;
+
+  // If already a full URL, use it
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  // Try to be friendly with keys like "job_123/abc.jpg" or "1762...jpg"
+  const base = uploadsBase();
+  if (!base) return undefined;
+  // Our backend mounts /uploads to local dir or serves S3 proxied links
+  return `${base}/uploads/${raw.replace(/^\/+/, "")}`;
+}
+
+/** Try to infer sector from key or URL: supports -s1_, _s2_, .s3-, etc. */
+function inferSectorFromKey(urlOrKey: string): number | null {
+  const s = urlOrKey.toLowerCase();
+  // common patterns: "-s1_", "_s2_", ".s3_", "-s10-", "_s10-", ".s10."
+  const m = s.match(/[\-_.]s(\d+)[\-_\.]/);
+  if (m && m[1]) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
@@ -115,15 +160,19 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       : null;
   }, [data?.job, selectedSector]);
 
-  /** Latest photo per type */
-  const latestByType = useMemo(() => {
-    const map = new Map<string, PhotoItem>();
+  /** Group latest photos by type *and* sector */
+  const latestByTypeForSector = useMemo(() => {
+    const map = new Map<number, Map<string, PhotoItem>>();
     const photos = Array.isArray(data?.photos) ? (data!.photos as PhotoItem[]) : [];
+    // iterate from oldest to newest so later items overwrite earlier ones
     for (const p of photos) {
       const t = (p.type || "").toUpperCase();
-      map.set(t, p); // last wins (assuming API sorted)
+      const src = (p as any).s3Key || (p as any).s3Url || "";
+      const sec = inferSectorFromKey(String(src)) ?? -1; // -1 = unknown
+      if (!map.has(sec)) map.set(sec, new Map());
+      map.get(sec)!.set(t, p);
     }
-    return map;
+    return map; // sector -> (type -> latest PhotoItem)
   }, [data?.photos]);
 
   /** Build rows for Excel preview table */
@@ -177,7 +226,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     setEditingImage(null);
   };
 
-  /** Required types to render tiles for */
+  /** Required types to render tiles for (sorted by sector template) */
   const requiredTypesForGrid = useMemo<string[]>(() => {
     if (Array.isArray(sectorBlock?.requiredTypes) && sectorBlock!.requiredTypes!.length) {
       return sectorBlock!.requiredTypes!;
@@ -187,9 +236,31 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     return [];
   }, [sectorBlock?.requiredTypes, data?.job]);
 
+  /** For current sector, get the latest photo per type with fallback */
+  function getLatestForType(t: string): PhotoItem | undefined {
+    const key = String(t || "").toUpperCase();
+
+    // prefer selected sector
+    if (selectedSector != null) {
+      const mapForThisSector = latestByTypeForSector.get(selectedSector);
+      if (mapForThisSector?.has(key)) return mapForThisSector.get(key);
+    }
+
+    // fallback: unknown sector bucket (-1)
+    const unknownMap = latestByTypeForSector.get(-1);
+    if (unknownMap?.has(key)) return unknownMap.get(key);
+
+    // final fallback: any sector that has it
+    for (const [, m] of latestByTypeForSector) {
+      if (m.has(key)) return m.get(key);
+    }
+    return undefined;
+  }
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-6xl h-[80vh] p-0 overflow-hidden">
+      {/* Give DialogContent a title so the aria warning disappears */}
+      <DialogContent aria-describedby={undefined} className="max-w-6xl h-[80vh] p-0 overflow-hidden">
         <DialogHeader className="px-6 pt-6">
           <DialogTitle className="flex items-center gap-2">
             <ImageIcon className="w-5 h-5" />
@@ -197,9 +268,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
           </DialogTitle>
         </DialogHeader>
 
-        {/* Tabs now wrap BOTH the header controls and the content panes */}
         <Tabs defaultValue="images" className="flex-1 flex flex-col min-h-0">
-          {/* Top controls INSIDE Tabs */}
           <div className="px-6 pb-3 flex items-center justify-between gap-3">
             <TabsList className="grid w-full max-w-xs grid-cols-2">
               <TabsTrigger value="images">Images</TabsTrigger>
@@ -225,7 +294,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
             )}
           </div>
 
-          {/* -------- Images -------- */}
+          {/* Images */}
           <TabsContent value="images" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6">
               {loading && (
@@ -240,15 +309,16 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                   {requiredTypesForGrid.length > 0 ? (
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                       {requiredTypesForGrid.map((t) => {
-                        const key = String(t || "").toUpperCase();
-                        const photo = latestByType.get(key);
-                        const caption = (key || "").replace(/_/g, " ");
+                        const photo = getLatestForType(t);
+                        const imgUrl = resolvePhotoUrl(photo);
+                        const caption = String(t || "").replace(/_/g, " ").toUpperCase();
+
                         return (
-                          <figure key={key} className="shrink-0 w-32">
+                          <figure key={t} className="shrink-0 w-32">
                             <div className="relative group">
-                              {photo?.s3Url ? (
+                              {imgUrl ? (
                                 <img
-                                  src={photo.s3Url}
+                                  src={imgUrl}
                                   alt={caption}
                                   className="w-32 h-32 object-cover rounded-md border"
                                   loading="lazy"
@@ -286,7 +356,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                             ) : (
                               <figcaption
                                 className="mt-1 text-xs text-muted-foreground truncate"
-                                title={photo?.s3Url || caption}
+                                title={imgUrl || caption}
                               >
                                 {photo ? imageNames[photo.id] || caption : `${caption} (missing)`}
                               </figcaption>
@@ -297,47 +367,50 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                     </div>
                   ) : Array.isArray(data?.photos) && data!.photos.length > 0 ? (
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                      {data!.photos.map((image) => (
-                        <figure key={image.id} className="shrink-0 w-32">
-                          <div className="relative group">
-                            <img
-                              src={image.s3Url}
-                              alt={image.type}
-                              className="w-32 h-32 object-cover rounded-md border"
-                              loading="lazy"
-                            />
-                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-center justify-center">
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => setEditingImage(image.id)}
-                              >
-                                <Edit3 className="w-3 h-3" />
-                              </Button>
+                      {data!.photos.map((image) => {
+                        const imgUrl = resolvePhotoUrl(image);
+                        const caption = (image.type || "").toUpperCase();
+                        return (
+                          <figure key={image.id} className="shrink-0 w-32">
+                            <div className="relative group">
+                              {imgUrl ? (
+                                <img
+                                  src={imgUrl}
+                                  alt={caption}
+                                  className="w-32 h-32 object-cover rounded-md border"
+                                  loading="lazy"
+                                />
+                              ) : (
+                                <div className="w-32 h-32 rounded-md border bg-muted/40 flex items-center justify-center">
+                                  <ImageOff className="w-6 h-6 opacity-60" />
+                                </div>
+                              )}
+                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-center justify-center">
+                                <Button size="sm" variant="secondary" onClick={() => setEditingImage(image.id)}>
+                                  <Edit3 className="w-3 h-3" />
+                                </Button>
+                              </div>
                             </div>
-                          </div>
-                          {editingImage === image.id ? (
-                            <Input
-                              defaultValue={imageNames[image.id] || image.type}
-                              onBlur={(e) => handleImageNameEdit(image.id, e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  handleImageNameEdit(image.id, (e.target as HTMLInputElement).value);
-                                }
-                              }}
-                              className="mt-1 h-7 text-xs"
-                              autoFocus
-                            />
-                          ) : (
-                            <figcaption
-                              className="mt-1 text-xs text-muted-foreground truncate"
-                              title={image.s3Url}
-                            >
-                              {imageNames[image.id] || image.type}
-                            </figcaption>
-                          )}
-                        </figure>
-                      ))}
+                            {editingImage === image.id ? (
+                              <Input
+                                defaultValue={imageNames[image.id] || caption}
+                                onBlur={(e) => handleImageNameEdit(image.id, e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    handleImageNameEdit(image.id, (e.target as HTMLInputElement).value);
+                                  }
+                                }}
+                                className="mt-1 h-7 text-xs"
+                                autoFocus
+                              />
+                            ) : (
+                              <figcaption className="mt-1 text-xs text-muted-foreground truncate" title={imgUrl}>
+                                {imageNames[image.id] || caption}
+                              </figcaption>
+                            )}
+                          </figure>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="rounded-lg border bg-muted p-6 text-muted-foreground">No photos yet.</div>
@@ -347,7 +420,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
             </div>
           </TabsContent>
 
-          {/* -------- Excel -------- */}
+          {/* Excel */}
           <TabsContent value="excel" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6 space-y-4">
               <div className="flex items-center justify-between">
