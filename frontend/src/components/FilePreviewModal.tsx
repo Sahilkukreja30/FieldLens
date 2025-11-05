@@ -33,23 +33,26 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Turn a PhotoItem into a fetchable URL (works with private S3 via backend redirect). */
+/** Get a usable IMG URL from a PhotoItem even when we only have an S3 key/URI.
+ * Uses backend redirect: /api/photos/:photoId/raw — works with private S3.
+ */
 function resolvePhotoUrl(p: PhotoItem | undefined | null): string | undefined {
   if (!p) return undefined;
   const raw = (p as any).s3Url || (p as any).s3Key || "";
   if (!raw) return undefined;
-  if (/^https?:\/\//i.test(raw)) return raw; // already public URL
+
+  // If backend already returned a full HTTP(S) URL, use it.
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  // Otherwise route through our backend (private S3 safe):
   const base = (api.defaults.baseURL || import.meta.env.VITE_API_URL || "").replace(/\/api\/?$/, "");
   return `${base}/api/photos/${encodeURIComponent((p as any).id)}/raw`;
 }
 
-/** Prefer explicit photo.sector, else parse from key/url using `sec{n}_` (new key format). */
-function getPhotoSector(p: any): number | null {
-  if (typeof p?.sector === "number" && Number.isFinite(p.sector)) return p.sector;
-  const src: string = String(p?.s3Key || p?.s3Url || "");
-  if (!src) return null;
-  // match .../sec3_... or _sec2- / .sec4. or -sec1_ etc.
-  const m = src.toLowerCase().match(/(?:^|[\/_.-])sec(\d+)(?:[_\/.-]|$)/i);
+/** Try to infer sector from S3 key/URL: supports -s1_, _s2_, .s3-, etc. */
+function inferSectorFromKey(urlOrKey: string): number | null {
+  const s = urlOrKey.toLowerCase();
+  const m = s.match(/[\-_.]s(\d+)[\-_\.]/);
   if (m && m[1]) {
     const n = Number(m[1]);
     return Number.isFinite(n) ? n : null;
@@ -62,9 +65,11 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // lightweight local rename editor (caption only)
   const [imageNames, setImageNames] = useState<Record<string, string>>({});
   const [editingImage, setEditingImage] = useState<string | null>(null);
 
+  /** Fetch job each time modal opens or taskId changes */
   useEffect(() => {
     if (!isOpen || !taskId) return;
     setLoading(true);
@@ -79,7 +84,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       .finally(() => setLoading(false));
   }, [isOpen, taskId]);
 
-  /** All sector numbers present on the job */
+  /** Available sector numbers (supports both new & legacy shapes) */
   const sectorsFromJob = useMemo<number[]>(() => {
     const j: any = data?.job;
     if (!j) return [];
@@ -100,13 +105,14 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
   }, [data?.job]);
 
   const [selectedSector, setSelectedSector] = useState<number | null>(null);
+
   useEffect(() => {
     if (!isOpen) return;
     if (sectorsFromJob.length === 0) setSelectedSector(null);
     else setSelectedSector((prev) => (prev != null && sectorsFromJob.includes(prev) ? prev : sectorsFromJob[0]));
   }, [isOpen, sectorsFromJob.join(",")]);
 
-  /** Sector details for header + excel table */
+  /** Sector block for the selected sector (or legacy single-sector fields) */
   const sectorBlock: SectorBlock | null = useMemo(() => {
     const j: any = data?.job;
     if (!j) return null;
@@ -137,40 +143,22 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
       : null;
   }, [data?.job, selectedSector]);
 
-  /** Map: sector -> (type -> latest PhotoItem) */
+  /** Group latest photos by type *and* sector */
   const latestByTypeForSector = useMemo(() => {
-    const out = new Map<number, Map<string, PhotoItem>>();
+    const map = new Map<number, Map<string, PhotoItem>>();
     const photos = Array.isArray(data?.photos) ? (data!.photos as PhotoItem[]) : [];
-    // old → new, so the last write wins for a type/sector
+    // iterate from oldest to newest so later items overwrite earlier ones
     for (const p of photos) {
       const t = (p.type || "").toUpperCase();
-      const sec = getPhotoSector(p);
-      if (!Number.isFinite(sec)) continue; // if unknown, skip for strictness
-      if (!out.has(sec!)) out.set(sec!, new Map());
-      out.get(sec!)!.set(t, p);
+      const src = (p as any).s3Key || (p as any).s3Url || "";
+      const sec = inferSectorFromKey(String(src)) ?? -1; // -1 = unknown
+      if (!map.has(sec)) map.set(sec, new Map());
+      map.get(sec)!.set(t, p);
     }
-    return out;
+    return map; // sector -> (type -> latest PhotoItem)
   }, [data?.photos]);
 
-  /** Strict getter: only return photo for the currently selected sector */
-  function getLatestForType(t: string): PhotoItem | undefined {
-    const key = String(t || "").toUpperCase();
-
-    // If the job has multiple sectors, we enforce strict sector matching.
-    if (selectedSector != null) {
-      const mapForThisSector = latestByTypeForSector.get(selectedSector);
-      return mapForThisSector?.get(key);
-    }
-
-    // Single-sector job (no selection UI) – try any available sector.
-    for (const [, m] of latestByTypeForSector) {
-      const hit = m.get(key);
-      if (hit) return hit;
-    }
-    return undefined;
-  }
-
-  /** Excel rows */
+  /** Build rows for Excel preview table */
   const rows = useMemo(() => {
     const j: any = data?.job ?? {};
     const created = j.createdAt ?? "—";
@@ -221,6 +209,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     setEditingImage(null);
   };
 
+  /** Required types to render tiles for (sorted by sector template) */
   const requiredTypesForGrid = useMemo<string[]>(() => {
     if (Array.isArray(sectorBlock?.requiredTypes) && sectorBlock!.requiredTypes!.length) {
       return sectorBlock!.requiredTypes!;
@@ -230,8 +219,30 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
     return [];
   }, [sectorBlock?.requiredTypes, data?.job]);
 
+  /** For current sector, get the latest photo per type with fallback */
+  function getLatestForType(t: string): PhotoItem | undefined {
+    const key = String(t || "").toUpperCase();
+
+    // prefer selected sector
+    if (selectedSector != null) {
+      const mapForThisSector = latestByTypeForSector.get(selectedSector);
+      if (mapForThisSector?.has(key)) return mapForThisSector.get(key);
+    }
+
+    // fallback: unknown sector bucket (-1)
+    const unknownMap = latestByTypeForSector.get(-1);
+    if (unknownMap?.has(key)) return unknownMap.get(key);
+
+    // final fallback: any sector that has it
+    for (const [, m] of latestByTypeForSector) {
+      if (m.has(key)) return m.get(key);
+    }
+    return undefined;
+  }
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
+      {/* Give DialogContent a title so the aria warning disappears */}
       <DialogContent aria-describedby={undefined} className="max-w-6xl h-[80vh] p-0 overflow-hidden">
         <DialogHeader className="px-6 pt-6">
           <DialogTitle className="flex items-center gap-2">
@@ -266,7 +277,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
             )}
           </div>
 
-          {/* IMAGES */}
+          {/* Images */}
           <TabsContent value="images" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6">
               {loading && (
@@ -392,7 +403,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
             </div>
           </TabsContent>
 
-          {/* EXCEL */}
+          {/* Excel */}
           <TabsContent value="excel" className="flex-1 min-h-0">
             <div className="h-full overflow-y-auto px-6 pb-6 space-y-4">
               <div className="flex items-center justify-between">
