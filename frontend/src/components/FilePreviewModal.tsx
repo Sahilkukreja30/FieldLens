@@ -415,15 +415,6 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                     <Download className="w-4 h-4 mr-2" />
                     Excel (Sector)
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => selectedSector != null && downloadJobZip(taskId, selectedSector)}
-                    disabled={!data || loading || !canSectorDownload}
-                  >
-                    <Archive className="w-4 h-4 mr-2" />
-                    ZIP (Sector)
-                  </Button>
                 </div>
               </div>
 

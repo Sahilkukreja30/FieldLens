@@ -1,6 +1,9 @@
+import React, { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { downloadJobZip } from "@/lib/api"; // make sure this exists (from previous step)
+import { deleteJob } from "@/lib/api";      // new helper you just added
 
 type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
 
@@ -11,17 +14,23 @@ export type UITask = {
   status: TaskStatus;
   createdAt: string;
   siteId?: string;
-  sectors?: any[]; // now includes [{sector, requiredTypes, currentIndex, status}]
+  sectors?: any[]; // [{ sector, status? }, ...]
   sectorProgress?: Record<string, { done: number; total: number }>;
 };
 
 export function TaskCard({
   task,
   onPreview,
+  onDeleted, // optional: parent can remove the card from list without full reload
 }: {
   task: UITask;
   onPreview: (taskId: string) => void;
+  onDeleted?: (taskId: string) => void;
 }) {
+  const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [selectedSector, setSelectedSector] = useState<string>("");
+
   const statusColors: Record<string, string> = {
     PENDING: "bg-yellow-100 text-yellow-800 border-yellow-300",
     IN_PROGRESS: "bg-blue-100 text-blue-800 border-blue-300",
@@ -30,24 +39,57 @@ export function TaskCard({
   };
 
   const prettyStatus = (s: TaskStatus) =>
-    s === "PENDING"
-      ? "Pending"
-      : s === "IN_PROGRESS"
-      ? "In Progress"
-      : s === "DONE"
-      ? "Completed"
-      : "Failed";
+    s === "PENDING" ? "Pending" :
+    s === "IN_PROGRESS" ? "In Progress" :
+    s === "DONE" ? "Completed" : "Failed";
 
-  // Normalize sectors to [{ sector, status }]
-  const sectors = Array.isArray(task.sectors)
-    ? task.sectors.map((s: any) =>
-        typeof s === "object" && s !== null
-          ? { sector: Number(s.sector), status: s.status || "PENDING" }
-          : { sector: Number(s), status: "PENDING" }
-      )
-    : [];
+  const sortedSectors = useMemo(() => {
+    const sectors = Array.isArray(task.sectors)
+      ? task.sectors.map((s: any) =>
+          typeof s === "object" && s !== null
+            ? { sector: Number(s.sector), status: s.status || "PENDING" }
+            : { sector: Number(s), status: "PENDING" }
+        )
+      : [];
+    return sectors.sort((a, b) => a.sector - b.sector);
+  }, [task.sectors]);
 
-  const sortedSectors = sectors.sort((a, b) => a.sector - b.sector);
+  const handleExport = async () => {
+    try {
+      setExporting(true);
+      const sector = selectedSector === "" ? undefined : Number(selectedSector);
+      await downloadJobZip(task.id, { sector });
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    const sure = window.confirm(
+      `Delete job "${task.title || task.id}"?\nThis will remove the job and all its photos from the database.${"\n\n"}You can also purge local files by choosing OK in the next step.`
+    );
+    if (!sure) return;
+
+    // Optional follow-up to decide purging files
+    const purge = window.confirm(
+      "Also attempt to delete local files referenced by photos? (Best-effort; S3 is skipped unless wired.)"
+    );
+
+    try {
+      setDeleting(true);
+      await deleteJob(task.id, { purgeFiles: purge });
+      if (onDeleted) onDeleted(task.id);
+      else window.location.reload();
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <Card className="flex flex-col">
@@ -56,9 +98,7 @@ export function TaskCard({
           <CardTitle className="text-base font-semibold min-w-0 truncate">
             {task.title}
           </CardTitle>
-          <Badge
-            className={`${statusColors[task.status]} ml-auto font-medium border`}
-          >
+          <Badge className={`${statusColors[task.status]} ml-auto font-medium border`}>
             {prettyStatus(task.status)}
           </Badge>
         </div>
@@ -67,12 +107,10 @@ export function TaskCard({
       <CardContent className="flex-1 flex flex-col gap-3 text-sm text-muted-foreground">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div className="break-all">
-            <span className="font-medium text-foreground">Job Id:</span>{" "}
-            {task.id}
+            <span className="font-medium text-foreground">Job Id:</span> {task.id}
           </div>
           <div className="break-all">
-            <span className="font-medium text-foreground">Phone:</span>{" "}
-            {task.phoneNumber}
+            <span className="font-medium text-foreground">Phone:</span> {task.phoneNumber}
           </div>
           <div>
             <span className="font-medium text-foreground">Created:</span>{" "}
@@ -80,22 +118,17 @@ export function TaskCard({
           </div>
           {task.siteId && (
             <div className="break-all">
-              <span className="font-medium text-foreground">Site ID:</span>{" "}
-              {task.siteId}
+              <span className="font-medium text-foreground">Site ID:</span> {task.siteId}
             </div>
           )}
         </div>
 
-        {/* Sector badges with status */}
         {sortedSectors.length > 0 && (
           <div className="mt-3">
             <div className="mb-1 text-foreground font-medium">Sectors</div>
             <div className="flex flex-wrap gap-2">
               {sortedSectors.map((s) => (
-                <Badge
-                  key={s.sector}
-                  className={`${statusColors[s.status || "PENDING"]} border`}
-                >
+                <Badge key={s.sector} className={`${statusColors[s.status || "PENDING"]} border`}>
                   S{s.sector} • {prettyStatus(s.status as TaskStatus)}
                 </Badge>
               ))}
@@ -103,9 +136,53 @@ export function TaskCard({
           </div>
         )}
 
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button size="sm" onClick={() => onPreview(task.id)}>
             Preview
+          </Button>
+
+          {task.status === "DONE" && (
+            <>
+              {sortedSectors.length > 0 && (
+                <select
+                  className="border rounded-md px-2 py-1 text-foreground"
+                  value={selectedSector}
+                  onChange={(e) => setSelectedSector(e.target.value)}
+                  disabled={exporting || deleting}
+                  aria-label="Select sector to export"
+                >
+                  <option value="">All sectors</option>
+                  {sortedSectors.map((s) => (
+                    <option key={s.sector} value={s.sector}>
+                      Sector {s.sector}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExport}
+                disabled={exporting || deleting}
+              >
+                {exporting
+                  ? "Exporting..."
+                  : selectedSector === ""
+                  ? "Export ZIP"
+                  : `Export ZIP (S${selectedSector})`}
+              </Button>
+            </>
+          )}
+
+          {/* Delete button (destructive) */}
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={handleDelete}
+            disabled={exporting || deleting}
+          >
+            {deleting ? "Deleting..." : "Delete"}
           </Button>
         </div>
       </CardContent>

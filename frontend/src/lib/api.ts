@@ -105,22 +105,62 @@ export async function downloadJobXlsx(id: string) {
   link.click();
   link.remove();
 }
-export async function downloadJobZip(jobId: string, sector?: number) {
-  const { data } = await api.get(`/jobs/${encodeURIComponent(jobId)}/export.zip`, {
-    params: sector != null ? { sector } : undefined,
-    responseType: "blob",
-  });
+export async function downloadJobZip(
+  jobId: string,
+  opts?: { sector?: number }
+): Promise<void> {
+  // Build URL using the page origin so it works on Vercel too
+  const url = new URL(`/api/jobs/${jobId}/export.zip`, window.location.origin);
+  if (typeof opts?.sector === "number") {
+    url.searchParams.set("sector", String(opts.sector));
+  }
 
-  const url = window.URL.createObjectURL(new Blob([data], { type: "application/zip" }));
-  const link = document.createElement("a");
-  const suffix = sector != null ? `_sec${sector}` : "";
-  link.href = url;
-  link.setAttribute("download", `job_${jobId}${suffix}.zip`);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
+  const res = await fetch(url.toString(), { method: "GET" });
+  if (!res.ok) {
+    // Surface backend errors (e.g., 404 when no photos for sector)
+    let msg = `Export failed: ${res.status} ${res.statusText}`;
+    try {
+      const json = await res.clone().json();
+      if (json?.detail) msg = `Export failed: ${json.detail}`;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  // Try to extract filename from Content-Disposition; fallback to sensible name
+  const disp = res.headers.get("Content-Disposition") || "";
+  const match = /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i.exec(disp);
+  const fallback = typeof opts?.sector === "number"
+    ? `job_${jobId}_sec${opts.sector}.zip`
+    : `job_${jobId}.zip`;
+  const filename = decodeURIComponent((match?.[1] || match?.[2] || fallback).trim());
+
+  const blob = await res.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(blobUrl);
 }
+
+export async function deleteJob(jobId: string, opts?: { purgeFiles?: boolean }) {
+  const url = new URL(`/api/jobs/${jobId}`, window.location.origin);
+  if (opts?.purgeFiles) url.searchParams.set("purge_files", "true");
+
+  const res = await fetch(url.toString(), { method: "DELETE" });
+  if (!res.ok) {
+    let msg = `Delete failed: ${res.status} ${res.statusText}`;
+    try {
+      const json = await res.clone().json();
+      if (json?.detail) msg = `Delete failed: ${json.detail}`;
+    } catch {}
+    throw new Error(msg);
+  }
+}
+
+
 
 export async function downloadJobXlsxWithImages(id: string) {
   const { data } = await api.get(`/jobs/${id}/export_with_images.xlsx`, {
