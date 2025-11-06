@@ -145,10 +145,8 @@ export async function downloadJobZip(
   window.URL.revokeObjectURL(blobUrl);
 }
 
-export async function deleteJob(jobId: string, opts?: { purgeFiles?: boolean }) {
+export async function deleteJob(jobId: string): Promise<void> {
   const url = new URL(`/api/jobs/${jobId}`, window.location.origin);
-  if (opts?.purgeFiles) url.searchParams.set("purge_files", "true");
-
   const res = await fetch(url.toString(), { method: "DELETE" });
   if (!res.ok) {
     let msg = `Delete failed: ${res.status} ${res.statusText}`;

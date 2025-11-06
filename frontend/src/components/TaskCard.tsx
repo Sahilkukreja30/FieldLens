@@ -40,16 +40,16 @@ export function TaskCard({
 
   const prettyStatus = (s: TaskStatus) =>
     s === "PENDING" ? "Pending" :
-    s === "IN_PROGRESS" ? "In Progress" :
-    s === "DONE" ? "Completed" : "Failed";
+      s === "IN_PROGRESS" ? "In Progress" :
+        s === "DONE" ? "Completed" : "Failed";
 
   const sortedSectors = useMemo(() => {
     const sectors = Array.isArray(task.sectors)
       ? task.sectors.map((s: any) =>
-          typeof s === "object" && s !== null
-            ? { sector: Number(s.sector), status: s.status || "PENDING" }
-            : { sector: Number(s), status: "PENDING" }
-        )
+        typeof s === "object" && s !== null
+          ? { sector: Number(s.sector), status: s.status || "PENDING" }
+          : { sector: Number(s), status: "PENDING" }
+      )
       : [];
     return sectors.sort((a, b) => a.sector - b.sector);
   }, [task.sectors]);
@@ -73,14 +73,10 @@ export function TaskCard({
     );
     if (!sure) return;
 
-    // Optional follow-up to decide purging files
-    const purge = window.confirm(
-      "Also attempt to delete local files referenced by photos? (Best-effort; S3 is skipped unless wired.)"
-    );
 
     try {
       setDeleting(true);
-      await deleteJob(task.id, { purgeFiles: purge });
+      await deleteJob(task.id);
       if (onDeleted) onDeleted(task.id);
       else window.location.reload();
     } catch (err) {
@@ -149,7 +145,6 @@ export function TaskCard({
                   value={selectedSector}
                   onChange={(e) => setSelectedSector(e.target.value)}
                   disabled={exporting || deleting}
-                  aria-label="Select sector to export"
                 >
                   <option value="">All sectors</option>
                   {sortedSectors.map((s) => (
@@ -169,22 +164,35 @@ export function TaskCard({
                 {exporting
                   ? "Exporting..."
                   : selectedSector === ""
-                  ? "Export ZIP"
-                  : `Export ZIP (S${selectedSector})`}
+                    ? "Export ZIP"
+                    : `Export ZIP (S${selectedSector})`}
               </Button>
             </>
           )}
 
-          {/* Delete button (destructive) */}
           <Button
             size="sm"
             variant="destructive"
-            onClick={handleDelete}
-            disabled={exporting || deleting}
+            onClick={async () => {
+              if (window.confirm(`Are you sure you want to delete job "${task.title || task.id}"?`)) {
+                try {
+                  setDeleting(true);
+                  await deleteJob(task.id);
+                  if (onDeleted) onDeleted(task.id);
+                  else window.location.reload();
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Delete failed.");
+                } finally {
+                  setDeleting(false);
+                }
+              }
+            }}
+            disabled={deleting || exporting}
           >
             {deleting ? "Deleting..." : "Delete"}
           </Button>
         </div>
+
       </CardContent>
     </Card>
   );
