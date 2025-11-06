@@ -138,7 +138,7 @@ export function TaskCard({
             <>
               {sortedSectors.length > 0 && (
                 <select
-                  className="border rounded-md px-2 py-1 text-black"
+                  className="border rounded-md px-2 py-1 text-background"
                   value={selectedSector}
                   onChange={(e) => setSelectedSector(e.target.value)}
                   disabled={exporting || deleting}
