@@ -37,7 +37,6 @@ export default function Dashboard() {
   }, []);
 
   const handleCreated = (job: BackendJob) => {
-    // If backend returns the whole merged job, replace or prepend
     setJobs((prev) => {
       const idx = prev.findIndex((j) => j.id === job.id);
       if (idx >= 0) {
@@ -75,8 +74,7 @@ export default function Dashboard() {
       createdAt: toIsoCreated(j),
       siteId: j?.siteId,
       sectors: j?.sectors,
-      // NEW: surface sectorProgress if backend provides it
-      sectorProgress: j?.sectorProgress, // { [sector]: {done,total} }
+      sectorProgress: j?.sectorProgress,
     }));
   }, [jobs]);
 
@@ -102,6 +100,12 @@ export default function Dashboard() {
   }, [uiTasks, searchQuery]);
 
   const handlePreview = (taskId: string) => setPreviewTask(taskId);
+
+  // ✅ NEW: remove job from list after delete
+  const handleDeleted = (taskId: string) => {
+    setJobs((prev) => prev.filter((j) => j.id !== taskId));
+    toast({ title: "Job deleted", description: `Job ${taskId} has been removed.` });
+  };
 
   return (
     <div className="space-y-6">
@@ -180,7 +184,12 @@ export default function Dashboard() {
         {!loading && !err && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredTasks.map((task) => (
-              <TaskCard key={task.id} task={task} onPreview={handlePreview} />
+              <TaskCard
+                key={task.id}
+                task={task}
+                onPreview={handlePreview}
+                onDeleted={handleDeleted} // ✅ added
+              />
             ))}
           </div>
         )}

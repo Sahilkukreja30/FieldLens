@@ -1,9 +1,9 @@
+// src/components/TaskCard.tsx
 import React, { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { downloadJobZip } from "@/lib/api"; // make sure this exists (from previous step)
-import { deleteJob } from "@/lib/api";      // new helper you just added
+import { downloadJobZip, deleteJob } from "@/lib/api";
 
 type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
 
@@ -14,14 +14,13 @@ export type UITask = {
   status: TaskStatus;
   createdAt: string;
   siteId?: string;
-  sectors?: any[]; // [{ sector, status? }, ...]
-  sectorProgress?: Record<string, { done: number; total: number }>;
+  sectors?: Array<{ sector: number; status?: TaskStatus } | number>;
 };
 
 export function TaskCard({
   task,
   onPreview,
-  onDeleted, // optional: parent can remove the card from list without full reload
+  onDeleted,
 }: {
   task: UITask;
   onPreview: (taskId: string) => void;
@@ -31,7 +30,7 @@ export function TaskCard({
   const [deleting, setDeleting] = useState(false);
   const [selectedSector, setSelectedSector] = useState<string>("");
 
-  const statusColors: Record<string, string> = {
+  const statusColors: Record<TaskStatus, string> = {
     PENDING: "bg-yellow-100 text-yellow-800 border-yellow-300",
     IN_PROGRESS: "bg-blue-100 text-blue-800 border-blue-300",
     DONE: "bg-green-100 text-green-800 border-green-300",
@@ -40,16 +39,16 @@ export function TaskCard({
 
   const prettyStatus = (s: TaskStatus) =>
     s === "PENDING" ? "Pending" :
-      s === "IN_PROGRESS" ? "In Progress" :
-        s === "DONE" ? "Completed" : "Failed";
+    s === "IN_PROGRESS" ? "In Progress" :
+    s === "DONE" ? "Completed" : "Failed";
 
   const sortedSectors = useMemo(() => {
     const sectors = Array.isArray(task.sectors)
       ? task.sectors.map((s: any) =>
-        typeof s === "object" && s !== null
-          ? { sector: Number(s.sector), status: s.status || "PENDING" }
-          : { sector: Number(s), status: "PENDING" }
-      )
+          typeof s === "object" && s !== null
+            ? { sector: Number(s.sector), status: (s.status || "PENDING") as TaskStatus }
+            : { sector: Number(s), status: "PENDING" as TaskStatus }
+        )
       : [];
     return sectors.sort((a, b) => a.sector - b.sector);
   }, [task.sectors]);
@@ -69,11 +68,9 @@ export function TaskCard({
 
   const handleDelete = async () => {
     const sure = window.confirm(
-      `Delete job "${task.title || task.id}"?\nThis will remove the job and all its photos from the database.${"\n\n"}You can also purge local files by choosing OK in the next step.`
+      `Delete job "${task.title || task.id}"?\nThis will remove the job and all its photos from the database.`
     );
     if (!sure) return;
-
-
     try {
       setDeleting(true);
       await deleteJob(task.id);
@@ -110,7 +107,7 @@ export function TaskCard({
           </div>
           <div>
             <span className="font-medium text-foreground">Created:</span>{" "}
-            {new Date(task.createdAt).toLocaleString()}
+            {task.createdAt ? new Date(task.createdAt).toLocaleString() : "—"}
           </div>
           {task.siteId && (
             <div className="break-all">
@@ -124,8 +121,8 @@ export function TaskCard({
             <div className="mb-1 text-foreground font-medium">Sectors</div>
             <div className="flex flex-wrap gap-2">
               {sortedSectors.map((s) => (
-                <Badge key={s.sector} className={`${statusColors[s.status || "PENDING"]} border`}>
-                  S{s.sector} • {prettyStatus(s.status as TaskStatus)}
+                <Badge key={s.sector} className={`${statusColors[s.status]} border`}>
+                  S{s.sector} • {prettyStatus(s.status)}
                 </Badge>
               ))}
             </div>
@@ -173,26 +170,12 @@ export function TaskCard({
           <Button
             size="sm"
             variant="destructive"
-            onClick={async () => {
-              if (window.confirm(`Are you sure you want to delete job "${task.title || task.id}"?`)) {
-                try {
-                  setDeleting(true);
-                  await deleteJob(task.id);
-                  if (onDeleted) onDeleted(task.id);
-                  else window.location.reload();
-                } catch (err) {
-                  alert(err instanceof Error ? err.message : "Delete failed.");
-                } finally {
-                  setDeleting(false);
-                }
-              }
-            }}
+            onClick={handleDelete}
             disabled={deleting || exporting}
           >
             {deleting ? "Deleting..." : "Delete"}
           </Button>
         </div>
-
       </CardContent>
     </Card>
   );

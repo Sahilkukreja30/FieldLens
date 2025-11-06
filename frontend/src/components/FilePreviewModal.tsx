@@ -12,7 +12,7 @@ import {
   downloadJobXlsx,
   downloadJobXlsxWithImages,
   // NEW sector-wise helpers (ensure these exist in api.ts)
-  downloadSectorExcel,
+  downloadSectorWorkbook,
   downloadJobZip,
   type JobDetail,
   type PhotoItem,
@@ -409,7 +409,7 @@ export default function FilePreviewModal({ isOpen, taskId, onClose }: Props) {
                   {/* Sector-wise — enabled only when a sector is selected */}
                   <Button
                     size="sm"
-                    onClick={() => selectedSector != null && downloadSectorExcel(taskId, selectedSector)}
+                    onClick={() => selectedSector != null && downloadSectorWorkbook()}
                     disabled={!data || loading || !canSectorDownload}
                   >
                     <Download className="w-4 h-4 mr-2" />

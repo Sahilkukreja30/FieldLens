@@ -1,71 +1,76 @@
+// src/lib/api.ts
 import axios from "axios";
 
+/** ---------- AXIOS CLIENT ---------- */
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api",
   withCredentials: true,
-  headers: {
-    "X-Requested-With": "XMLHttpRequest",
-  },
 });
 
-// Job types from backend
-// Add to BackendJob
-export type BackendJob = {
-  id: string;
-  workerPhone: string;
+/** ---------- TYPES (keep in sync with backend) ---------- */
+export type SectorBlock = {
+  sector: number;
   requiredTypes: string[];
   currentIndex: number;
   status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
-  sector?: number;          // legacy (single)
-  createdAt?: string | null;
-  // NEW
-  siteId?: string;
-  sectors?: number[];       // merged list
 };
 
-
-
+export type BackendJob = {
+  id: string;
+  workerPhone: string;
+  siteId: string;
+  sectors: SectorBlock[];
+  status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
+  createdAt?: string | null;
+  macId?: string | null;
+  rsnId?: string | null;
+  azimuthDeg?: number | string | null;
+};
 
 export type PhotoItem = {
   id: string;
   jobId: string;
   type: string;
-  s3Url: string;
-  fields?: Record<string, any>;
-  checks?: Record<string, any>;
+  sector?: number | null;
+  s3Key?: string | null;
+  s3Url?: string | null; // presigned by backend
   status?: string;
   reason?: string[];
+  fields?: Record<string, any>;
+  checks?: Record<string, any>;
+  phash?: string | null;
+  ocrText?: string | null;
 };
 
 export type JobDetail = {
-  job: {
-    _id: string;
-    workerPhone: string;
-    requiredTypes: string[];
-    currentIndex: number;
-    status: string;
-    sector?: number;
-    macId?:string,
-    rsnId?:string,
-    azimuthDeg?:string,
-    createdAt?: string | null;
-    siteId?: string;
-    sectors?: number[];
-  };
+  job: BackendJob;
   photos: PhotoItem[];
 };
-// ---------------- API FUNCTIONS ----------------
 
+/** ---------- HELPERS ---------- */
+function downloadBlob(data: BlobPart, filename: string, mime?: string) {
+  const blob = new Blob([data], { type: mime || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** ---------- API CALLS ---------- */
 export async function fetchJobs(): Promise<BackendJob[]> {
   const { data } = await api.get("/jobs");
-  console.log(data);
-  
   return data;
 }
 
-export async function fetchJobDetail(id: string) {
-  const { data } = await api.get(`/jobs/${id}`);
-  return data;
+export async function fetchJobDetail(jobId: string, opts?: { sector?: number }) {
+  const { data } = await api.get(`/jobs/${encodeURIComponent(jobId)}`, {
+    params: opts?.sector != null ? { sector: opts.sector } : undefined,
+  });
+  return data as JobDetail;
 }
 
 export async function createJob(input: {
@@ -77,22 +82,54 @@ export async function createJob(input: {
   return data;
 }
 
-export async function downloadSectorExcel(jobId: string, sector?: number) {
-  const { data } = await api.get(`/exports/sector.xlsx`, {
-    params: sector != null ? { jobId, sector } : { jobId },
+/** ----- SECTOR-WISE ZIP EXPORT (new) ----- */
+export async function downloadJobZip(
+  jobId: string,
+  opts?: { sector?: number }
+): Promise<void> {
+  const { data, headers } = await api.get(
+    `/jobs/${encodeURIComponent(jobId)}/export.zip`,
+    {
+      params: opts?.sector != null ? { sector: opts.sector } : undefined,
+      responseType: "blob",
+    }
+  );
+
+  // Try to honor backend filename
+  const cd = (headers["content-disposition"] || "") as string;
+  const match = cd.match(/filename="?([^"]+)"?/i);
+  const filename =
+    match?.[1] ||
+    (opts?.sector != null
+      ? `job_${jobId}_sec${opts.sector}.zip`
+      : `job_${jobId}.zip`);
+
+  downloadBlob(data, filename, "application/zip");
+}
+
+/** ----- OPTIONAL: sector workbook (one sheet per sector) ----- */
+export async function downloadSectorWorkbook(
+  opts?: { date_from?: string; date_to?: string }
+): Promise<void> {
+  const { data, headers } = await api.get("/exports/sector.xlsx", {
+    params: opts,
     responseType: "blob",
   });
-
-  const url = window.URL.createObjectURL(new Blob([data]));
-  const link = document.createElement("a");
-  const suffix = sector != null ? `_sec${sector}` : "";
-  link.href = url;
-  link.setAttribute("download", `job_${jobId}${suffix}_sector.xlsx`);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
+  const cd = (headers["content-disposition"] || "") as string;
+  const match = cd.match(/filename="?([^"]+)"?/i);
+  const filename = match?.[1] || "export_sector.xlsx";
+  downloadBlob(
+    data,
+    filename,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  );
 }
+
+/** ----- DELETE JOB (new) ----- */
+export async function deleteJob(jobId: string): Promise<void> {
+  await api.delete(`/jobs/${encodeURIComponent(jobId)}`);
+}
+
 export async function downloadJobXlsx(id: string) {
   const { data } = await api.get(`/jobs/${id}/export.xlsx`, {
     responseType: "blob",
@@ -105,58 +142,8 @@ export async function downloadJobXlsx(id: string) {
   link.click();
   link.remove();
 }
-export async function downloadJobZip(
-  jobId: string,
-  opts?: { sector?: number }
-): Promise<void> {
-  // Build URL using the page origin so it works on Vercel too
-  const url = new URL(`/api/jobs/${jobId}/export.zip`, window.location.origin);
-  if (typeof opts?.sector === "number") {
-    url.searchParams.set("sector", String(opts.sector));
-  }
 
-  const res = await fetch(url.toString(), { method: "GET" });
-  if (!res.ok) {
-    // Surface backend errors (e.g., 404 when no photos for sector)
-    let msg = `Export failed: ${res.status} ${res.statusText}`;
-    try {
-      const json = await res.clone().json();
-      if (json?.detail) msg = `Export failed: ${json.detail}`;
-    } catch {}
-    throw new Error(msg);
-  }
 
-  // Try to extract filename from Content-Disposition; fallback to sensible name
-  const disp = res.headers.get("Content-Disposition") || "";
-  const match = /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i.exec(disp);
-  const fallback = typeof opts?.sector === "number"
-    ? `job_${jobId}_sec${opts.sector}.zip`
-    : `job_${jobId}.zip`;
-  const filename = decodeURIComponent((match?.[1] || match?.[2] || fallback).trim());
-
-  const blob = await res.blob();
-  const blobUrl = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = blobUrl;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.URL.revokeObjectURL(blobUrl);
-}
-
-export async function deleteJob(jobId: string): Promise<void> {
-  const url = new URL(`/api/jobs/${jobId}`, window.location.origin);
-  const res = await fetch(url.toString(), { method: "DELETE" });
-  if (!res.ok) {
-    let msg = `Delete failed: ${res.status} ${res.statusText}`;
-    try {
-      const json = await res.clone().json();
-      if (json?.detail) msg = `Delete failed: ${json.detail}`;
-    } catch {}
-    throw new Error(msg);
-  }
-}
 
 
 
